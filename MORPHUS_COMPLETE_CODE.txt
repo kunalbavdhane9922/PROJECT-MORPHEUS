@@ -1,0 +1,2218 @@
+================================================================================
+                    MORPHUS SOS APP — COMPLETE CODEBASE
+                    Hardened, Production-Ready, Final Version
+================================================================================
+
+================================================================================
+📂 SYSTEM ARCHITECTURE
+================================================================================
+
+app/src/main/
+├── AndroidManifest.xml
+├── java/com/morphus/app/
+│   ├── data/
+│   │   ├── AppRepository.kt          ← Emergency contacts CRUD
+│   │   └── SettingsManager.kt        ← All SharedPreferences (PIN, toggles, thresholds)
+│   ├── manager/
+│   │   ├── AudioRecorder.kt          ← Background mic recording (evidence)
+│   │   ├── CallManager.kt            ← Auto-call escalation
+│   │   ├── LocationBroadcaster.kt    ← In-app location broadcast
+│   │   ├── LocationTracker.kt        ← FusedLocation 10s GPS tracking
+│   │   ├── NetworkGuardian.kt        ← Signal-loss detection + Supabase queue flush
+│   │   ├── SmsHandler.kt             ← SMS send + retry + API-safe
+│   │   ├── SosManager.kt             ← Activation/deactivation orchestrator
+│   │   └── TriggerManager.kt         ← Shake/power triggers (placeholder)
+│   ├── network/
+│   │   ├── IncidentData.kt           ← Incident data model + JSON serialization
+│   │   ├── SupabaseClient.kt         ← Supabase REST API (Storage + Postgres)
+│   │   └── UploadQueueManager.kt     ← Offline-first upload queue (SharedPrefs)
+│   ├── receiver/
+│   │   └── BootReceiver.kt           ← Reboot persistence
+│   ├── service/
+│   │   ├── EmergencyService.kt       ← THE BRAIN — SOS foreground service
+│   │   ├── MorphusService.kt         ← Background location service
+│   │   └── MorphusAccessibilityService.kt ← Power button detection
+│   ├── ui/
+│   │   ├── CalculatorFragment.kt     ← Calculator + hidden SOS trigger
+│   │   ├── CalculatorViewModel.kt    ← Calculator logic
+│   │   ├── MainActivity.kt           ← Single-activity host
+│   │   └── SOSSettingsActivity.kt    ← Secret settings panel
+│   └── utils/
+│       ├── Constants.kt              ← App-wide constants + Supabase config
+│       └── SystemHelper.kt           ← Accessibility/notification checks
+└── res/layout/
+    ├── activity_sos_settings.xml
+    └── dialog_change_pin.xml
+
+================================================================================
+DATA FLOW DIAGRAM
+================================================================================
+
+  Calculator PIN / Gesture
+          │
+          ▼
+    ┌──────────┐     ┌──────────────┐
+    │SosManager│────▶│EmergencyService│ (Foreground, WakeLock, START_STICKY)
+    └──────────┘     └──────┬───────┘
+                            │
+        ┌───────────────────┼───────────────────┐
+        ▼                   ▼                   ▼
+  LocationTracker     AudioRecorder       NetworkGuardian
+   (10s GPS)         (MIC → .m4a)       (Connectivity)
+        │                   │                   │
+        ▼                   ▼                   ▼
+    SmsHandler       UploadQueueManager   SIGNAL LOST SMS
+   (SOS/Heartbeat)   (Offline queue)     + Queue flush
+        │                   │
+        ▼                   ▼
+    CallManager      SupabaseClient
+   (Auto-dial)    (Storage + Postgres)
+
+================================================================================
+FILE 01: AndroidManifest.xml
+================================================================================
+
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Location Permissions -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+    <!-- SMS Permissions -->
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+
+    <!-- Phone Call Permission -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+
+    <!-- Audio Recording Permission -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Foreground Service Permission -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <!-- Battery Optimization Exemption -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- Boot Completed -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Vibration -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Wake Lock -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Notifications (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Hardware features -->
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_backspace"
+        android:label="@string/app_name"
+        android:roundIcon="@drawable/ic_backspace"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Morphus"
+        tools:targetApi="34">
+
+        <activity
+            android:name="com.morphus.app.ui.MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Morphus">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name="com.morphus.app.service.MorphusService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
+        <service
+            android:name="com.morphus.app.service.EmergencyService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="location|microphone" />
+
+        <service
+            android:name="com.morphus.app.service.MorphusAccessibilityService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <receiver
+            android:name="com.morphus.app.receiver.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <activity
+            android:name="com.morphus.app.ui.SOSSettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Morphus" />
+
+    </application>
+</manifest>
+
+================================================================================
+FILE 02: utils/Constants.kt
+================================================================================
+
+package com.morphus.app.utils
+
+object Constants {
+
+    const val PREFS_NAME = "morphus_prefs"
+    const val KEY_SOS_ACTIVE = "sos_active"
+    const val DEFAULT_EMERGENCY_MESSAGE = "EMERGENCY! I need help. My current location: %s"
+    const val SERVICE_CHANNEL_ID = "morphus_service_channel"
+
+    // Location Broadcast
+    const val LOCATION_BROADCAST_ACTION = "com.morphus.app.action.LOCATION_UPDATE"
+    const val EXTRA_LATITUDE  = "extra_latitude"
+    const val EXTRA_LONGITUDE = "extra_longitude"
+    const val EXTRA_SPEED     = "extra_speed"
+    const val EXTRA_BEARING   = "extra_bearing"
+    const val EXTRA_ACCURACY  = "extra_accuracy"
+    const val EXTRA_TIMESTAMP = "extra_timestamp"
+    const val LOCATION_STALE_THRESHOLD_MS = 5 * 60 * 1_000L
+
+    // Emergency Data
+    const val KEY_EMERGENCY_CONTACTS = "emergency_contacts"
+
+    // SMS Configuration
+    const val SMS_MAX_RETRIES = 2
+    const val SMS_RETRY_DELAY_MS = 30_000L
+
+    // SOS Settings
+    const val KEY_SOS_PIN = "sos_pin"
+    const val DEFAULT_SOS_PIN = "1234"
+    const val KEY_SHAKE_ENABLED = "shake_enabled"
+    const val KEY_POWER_BUTTON_ENABLED = "power_enabled"
+    const val KEY_AUTO_CALL_ENABLED = "auto_call_enabled"
+    const val KEY_AUDIO_RECORD_ENABLED = "audio_record_enabled"
+    const val KEY_MOVEMENT_THRESHOLD = "movement_threshold"
+    const val DEFAULT_MOVEMENT_THRESHOLD = 50
+    const val KEY_UPDATE_INTERVAL = "update_interval"
+    const val DEFAULT_UPDATE_INTERVAL = 5
+    const val KEY_MESSAGE_TEMPLATE = "sos_message_template"
+    const val DEFAULT_MESSAGE_TEMPLATE = "EMERGENCY SOS! I need help."
+
+    // ── Supabase Configuration ──────────────────────────────────────────────
+
+    const val SUPABASE_URL = "https://qyqzmznepunvbjnyuvav.supabase.co"
+    const val SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF5cXptem5lcHVudmJqbnl1dmF2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTkwMzMsImV4cCI6MjA4Nzc5NTAzM30.NBF7MHx06Rcq3OneC-vlnN-035TD6Kc_xqbpVwVhPfU"
+    const val SUPABASE_BUCKET = "sos-evidence"
+    const val UPLOAD_QUEUE_PREFS = "morphus_upload_queue"
+    const val UPLOAD_QUEUE_KEY = "pending_uploads"
+}
+
+================================================================================
+FILE 03: utils/SystemHelper.kt  [NEW — Hardening]
+================================================================================
+
+package com.morphus.app.utils
+
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.Context
+import android.os.Build
+import android.provider.Settings
+import android.view.accessibility.AccessibilityManager
+import com.morphus.app.service.MorphusAccessibilityService
+
+object SystemHelper {
+
+    @JvmStatic
+    fun isAccessibilityServiceEnabled(context: Context): Boolean {
+        return try {
+            val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+                ?: return false
+            val enabledServices = am.getEnabledAccessibilityServiceList(
+                AccessibilityServiceInfo.FEEDBACK_ALL_MASK
+            )
+            val targetClass = MorphusAccessibilityService::class.java.name
+            enabledServices.any { it.resolveInfo.serviceInfo.name == targetClass }
+        } catch (e: Exception) {
+            try {
+                val setting = Settings.Secure.getString(
+                    context.contentResolver,
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                ) ?: ""
+                setting.contains(context.packageName, ignoreCase = true)
+            } catch (_: Exception) { false }
+        }
+    }
+
+    @JvmStatic
+    fun hasNotificationPermission(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.POST_NOTIFICATIONS
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else { true }
+    }
+}
+
+================================================================================
+FILE 04: data/SettingsManager.kt
+================================================================================
+
+package com.morphus.app.data
+
+import android.content.Context
+import android.content.SharedPreferences
+import com.morphus.app.utils.Constants
+
+class SettingsManager(context: Context) {
+
+    private val prefs: SharedPreferences = context.getSharedPreferences(
+        Constants.PREFS_NAME, Context.MODE_PRIVATE
+    )
+
+    var sosPin: String
+        get() = prefs.getString(Constants.KEY_SOS_PIN, Constants.DEFAULT_SOS_PIN) ?: Constants.DEFAULT_SOS_PIN
+        set(value) = prefs.edit().putString(Constants.KEY_SOS_PIN, value).apply()
+
+    fun verifyPin(input: String): Boolean = input == sosPin
+
+    var isShakeEnabled: Boolean
+        get() = prefs.getBoolean(Constants.KEY_SHAKE_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(Constants.KEY_SHAKE_ENABLED, value).apply()
+
+    var isPowerButtonEnabled: Boolean
+        get() = prefs.getBoolean(Constants.KEY_POWER_BUTTON_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(Constants.KEY_POWER_BUTTON_ENABLED, value).apply()
+
+    var isAutoCallEnabled: Boolean
+        get() = prefs.getBoolean(Constants.KEY_AUTO_CALL_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(Constants.KEY_AUTO_CALL_ENABLED, value).apply()
+
+    var isAudioRecordEnabled: Boolean
+        get() = prefs.getBoolean(Constants.KEY_AUDIO_RECORD_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(Constants.KEY_AUDIO_RECORD_ENABLED, value).apply()
+
+    var movementThreshold: Int
+        get() = prefs.getInt(Constants.KEY_MOVEMENT_THRESHOLD, Constants.DEFAULT_MOVEMENT_THRESHOLD)
+        set(value) = prefs.edit().putInt(Constants.KEY_MOVEMENT_THRESHOLD, value).apply()
+
+    var updateInterval: Int
+        get() = prefs.getInt(Constants.KEY_UPDATE_INTERVAL, Constants.DEFAULT_UPDATE_INTERVAL)
+        set(value) = prefs.edit().putInt(Constants.KEY_UPDATE_INTERVAL, value).apply()
+
+    var messageTemplate: String
+        get() = prefs.getString(Constants.KEY_MESSAGE_TEMPLATE, Constants.DEFAULT_MESSAGE_TEMPLATE) ?: Constants.DEFAULT_MESSAGE_TEMPLATE
+        set(value) = prefs.edit().putString(Constants.KEY_MESSAGE_TEMPLATE, value).apply()
+}
+
+================================================================================
+FILE 05: data/AppRepository.kt
+================================================================================
+
+package com.morphus.app.data
+
+import android.content.Context
+
+class AppRepository(private val context: Context) {
+
+    private val prefs = context.getSharedPreferences(
+        com.morphus.app.utils.Constants.PREFS_NAME, Context.MODE_PRIVATE
+    )
+
+    fun getEmergencyContacts(): List<String> {
+        val contacts = prefs.getStringSet(
+            com.morphus.app.utils.Constants.KEY_EMERGENCY_CONTACTS, null
+        )
+        return contacts?.toList() ?: emptyList()
+    }
+
+    fun saveEmergencyContact(phone: String) {
+        val current = getEmergencyContacts().toMutableSet()
+        current.add(phone)
+        prefs.edit().putStringSet(
+            com.morphus.app.utils.Constants.KEY_EMERGENCY_CONTACTS, current
+        ).apply()
+    }
+
+    fun removeEmergencyContact(phone: String) {
+        val current = getEmergencyContacts().toMutableSet()
+        current.remove(phone)
+        prefs.edit().putStringSet(
+            com.morphus.app.utils.Constants.KEY_EMERGENCY_CONTACTS, current
+        ).apply()
+    }
+}
+
+================================================================================
+FILE 06: manager/LocationTracker.kt
+================================================================================
+
+package com.morphus.app.manager
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.pm.PackageManager
+import android.location.LocationManager
+import android.os.Handler
+import android.os.HandlerThread
+import android.util.Log
+import androidx.core.content.ContextCompat
+import com.google.android.gms.location.*
+import com.morphus.app.utils.Constants
+
+class LocationTracker(
+    private val context: Context,
+    private val onLocation: ((LocationData) -> Unit)? = null,
+    private val onGpsDisabled: (() -> Unit)? = null
+) {
+
+    companion object {
+        private const val TAG = "LocationTracker"
+        private const val UPDATE_INTERVAL_MS = 10_000L
+        private const val FASTEST_INTERVAL_MS = 5_000L
+        private const val HANDLER_THREAD_NAME = "LocationTrackerThread"
+    }
+
+    data class LocationData(
+        val latitude: Double, val longitude: Double,
+        val speed: Float, val bearing: Float,
+        val accuracy: Float, val timestamp: Long
+    ) {
+        fun toFormattedString(): String =
+            "Lat: $latitude, Lon: $longitude, Speed: ${"%.1f".format(speed)} m/s, Bearing: ${"%.0f".format(bearing)}°, Accuracy: ${"%.0f".format(accuracy)} m"
+        fun toMapsUrl(): String = "https://maps.google.com/?q=$latitude,$longitude"
+    }
+
+    private val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+    private var handlerThread: HandlerThread? = null
+    private var backgroundHandler: Handler? = null
+
+    @Volatile var lastLocation: LocationData? = null; private set
+    @Volatile var isTracking: Boolean = false; private set
+
+    private val locationCallback = object : LocationCallback() {
+        override fun onLocationResult(result: LocationResult) {
+            val loc = result.lastLocation ?: return
+            val data = LocationData(loc.latitude, loc.longitude, loc.speed, loc.bearing, loc.accuracy, loc.time)
+            lastLocation = data
+            onLocation?.invoke(data)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun startTracking() {
+        if (isTracking) return
+        if (!hasLocationPermission()) return
+        handlerThread = HandlerThread(HANDLER_THREAD_NAME).also { it.start() }
+        backgroundHandler = Handler(handlerThread!!.looper)
+        if (!isGpsEnabled()) { onGpsDisabled?.invoke(); fetchLastKnownLocation() }
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, UPDATE_INTERVAL_MS)
+            .setMinUpdateIntervalMillis(FASTEST_INTERVAL_MS).setWaitForAccurateLocation(false).build()
+        fusedClient.requestLocationUpdates(request, locationCallback, handlerThread!!.looper)
+        isTracking = true
+        fetchLastKnownLocation()
+    }
+
+    fun stopTracking() {
+        if (!isTracking) return
+        try { fusedClient.removeLocationUpdates(locationCallback) } catch (e: Exception) { Log.e(TAG, "Error: ${e.message}") }
+        isTracking = false
+        try { handlerThread?.quitSafely() } catch (e: Exception) { Log.e(TAG, "Error: ${e.message}") }
+        handlerThread = null; backgroundHandler = null
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun fetchLastKnownLocation() {
+        if (!hasLocationPermission()) return
+        fusedClient.lastLocation.addOnSuccessListener { loc ->
+            if (loc == null) return@addOnSuccessListener
+            val ageMs = System.currentTimeMillis() - loc.time
+            if (ageMs > Constants.LOCATION_STALE_THRESHOLD_MS) return@addOnSuccessListener
+            if (lastLocation == null) {
+                val data = LocationData(loc.latitude, loc.longitude, loc.speed, loc.bearing, loc.accuracy, loc.time)
+                lastLocation = data; onLocation?.invoke(data)
+            }
+        }
+    }
+
+    private fun hasLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun isGpsEnabled(): Boolean {
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return false
+        return lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
+    }
+}
+
+================================================================================
+FILE 07: manager/SmsHandler.kt  [HARDENED — API-safe SmsManager]
+================================================================================
+
+package com.morphus.app.manager
+
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.telephony.SmsManager
+import android.util.Log
+import androidx.annotation.RequiresPermission
+import com.morphus.app.utils.Constants
+import java.text.SimpleDateFormat
+import java.util.*
+
+class SmsHandler(private val context: Context) {
+
+    private val handler = Handler(Looper.getMainLooper())
+    companion object { private const val TAG = "SmsHandler" }
+
+    @RequiresPermission(Manifest.permission.SEND_SMS)
+    fun sendSosSms(location: LocationTracker.LocationData, contacts: List<String>, retryCount: Int = 0) {
+        if (contacts.isEmpty()) return
+        sendGenericSms(contacts, formatSosMessage(location), retryCount)
+    }
+
+    @RequiresPermission(Manifest.permission.SEND_SMS)
+    fun sendGenericSms(contacts: List<String>, message: String, retryCount: Int = 0) {
+        if (contacts.isEmpty()) return
+
+        val smsManager: SmsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            context.getSystemService(SmsManager::class.java)
+        } else {
+            @Suppress("DEPRECATION") SmsManager.getDefault()
+        }
+
+        var success = true
+        for (phone in contacts) {
+            try { smsManager.sendTextMessage(phone, null, message, null, null) }
+            catch (e: Exception) { Log.e(TAG, "SMS fail $phone: ${e.message}"); success = false }
+        }
+
+        if (!success && retryCount < Constants.SMS_MAX_RETRIES) {
+            handler.postDelayed({ sendGenericSms(contacts, message, retryCount + 1) }, Constants.SMS_RETRY_DELAY_MS)
+        }
+    }
+
+    private fun formatSosMessage(loc: LocationTracker.LocationData): String {
+        val battery = getBatteryLevel()
+        val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(loc.timestamp))
+        return """
+            EMERGENCY SOS
+            Lat: ${loc.latitude}
+            Lon: ${loc.longitude}
+            Battery: $battery%
+            Time: $time
+            Link: ${loc.toMapsUrl()}
+        """.trimIndent()
+    }
+
+    private fun getBatteryLevel(): Int {
+        val batteryStatus: Intent? = IntentFilter(Intent.ACTION_BATTERY_CHANGED).let { context.registerReceiver(null, it) }
+        val level = batteryStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = batteryStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        return if (level >= 0 && scale > 0) (level * 100 / scale) else -1
+    }
+}
+
+================================================================================
+FILE 08: manager/AudioRecorder.kt
+================================================================================
+
+package com.morphus.app.manager
+
+import android.content.Context
+import android.media.MediaRecorder
+import android.util.Log
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
+
+class AudioRecorder(private val context: Context) {
+
+    private var recorder: MediaRecorder? = null
+
+    /**
+     * The file currently being recorded to, or the last recorded file.
+     * Exposed for EmergencyService to package with Supabase incident reports.
+     */
+    var currentFile: File? = null
+        private set
+
+    var isRecording: Boolean = false; private set
+    companion object { private const val TAG = "AudioRecorder" }
+
+    fun startRecording() {
+        if (isRecording) return
+        try {
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+            val storageDir = context.getExternalFilesDir(null) ?: context.filesDir
+            val evidenceDir = File(storageDir, "evidence").apply { if (!exists()) mkdirs() }
+            currentFile = File(evidenceDir, "SOS_REC_$timestamp.m4a")
+            recorder = MediaRecorder().apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setOutputFile(currentFile?.absolutePath)
+                prepare(); start()
+            }
+            isRecording = true
+        } catch (e: Exception) { Log.e(TAG, "Failed: ${e.message}"); stopRecording() }
+    }
+
+    fun stopRecording() {
+        try { recorder?.apply { stop(); release() } }
+        catch (e: Exception) { Log.e(TAG, "Error: ${e.message}") }
+        finally { recorder = null; isRecording = false }
+    }
+}
+
+================================================================================
+FILE 09: manager/CallManager.kt
+================================================================================
+
+package com.morphus.app.manager
+
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.util.Log
+import androidx.annotation.RequiresPermission
+
+class CallManager(private val context: Context) {
+
+    companion object { private const val TAG = "CallManager" }
+
+    @RequiresPermission(Manifest.permission.CALL_PHONE)
+    fun makeEmergencyCall(phoneNumber: String) {
+        try {
+            val intent = Intent(Intent.ACTION_CALL).apply {
+                data = Uri.parse("tel:$phoneNumber")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) { Log.e(TAG, "Call failed: ${e.message}") }
+    }
+
+    @RequiresPermission(Manifest.permission.CALL_PHONE)
+    fun startCallEscalation(contacts: List<String>) {
+        if (contacts.isEmpty()) return
+        makeEmergencyCall(contacts.first())
+    }
+}
+
+================================================================================
+FILE 10: manager/NetworkGuardian.kt  [HARDENED + Supabase queue flush]
+================================================================================
+
+package com.morphus.app.manager
+
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.util.Log
+import com.morphus.app.data.AppRepository
+
+class NetworkGuardian(
+    private val context: Context,
+    private val smsHandler: SmsHandler,
+    private val repository: AppRepository
+) {
+
+    companion object { private const val TAG = "NetworkGuardian" }
+
+    private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private var isEmergencyMode = false
+    private var lastLocation: LocationTracker.LocationData? = null
+    private var signalLostSent = false
+    private var isRegistered = false
+
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onLost(network: Network) {
+            super.onLost(network)
+            if (isEmergencyMode && !signalLostSent) {
+                sendSignalLostSms()
+                signalLostSent = true
+            }
+        }
+        override fun onAvailable(network: Network) {
+            super.onAvailable(network)
+            Log.d(TAG, "Network restored")
+            // ── Supabase: Flush queued uploads on connectivity restore ──
+            try { com.morphus.app.network.UploadQueueManager(context).processQueue() }
+            catch (e: Exception) { Log.e(TAG, "Queue flush failed: ${e.message}") }
+        }
+    }
+
+    fun start(active: Boolean, location: LocationTracker.LocationData?) {
+        isEmergencyMode = active; lastLocation = location; signalLostSent = false
+        if (isRegistered) return
+        try {
+            val request = NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build()
+            connectivityManager.registerNetworkCallback(request, networkCallback)
+            isRegistered = true
+        } catch (e: Exception) { Log.e(TAG, "Register failed: ${e.message}") }
+    }
+
+    fun stop() {
+        isEmergencyMode = false
+        if (!isRegistered) return
+        try { connectivityManager.unregisterNetworkCallback(networkCallback) } catch (_: Exception) {}
+        isRegistered = false
+    }
+
+    fun updateLocation(location: LocationTracker.LocationData) { lastLocation = location }
+
+    private fun sendSignalLostSms() {
+        val contacts = repository.getEmergencyContacts()
+        if (contacts.isEmpty()) return
+        val lat = lastLocation?.latitude ?: 0.0; val lon = lastLocation?.longitude ?: 0.0
+        val mapsUrl = lastLocation?.toMapsUrl() ?: "Unknown"
+        try { smsHandler.sendGenericSms(contacts, "SIGNAL LOST! Last location: $lat, $lon. $mapsUrl. Connection dropped.") }
+        catch (e: Exception) { Log.e(TAG, "Signal lost SMS failed: ${e.message}") }
+    }
+}
+
+================================================================================
+FILE 11: manager/SosManager.kt  [HARDENED — Dedup via SharedPrefs]
+================================================================================
+
+package com.morphus.app.manager
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.media.AudioAttributes
+import android.media.RingtoneManager
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import com.morphus.app.R
+import com.morphus.app.ui.MainActivity
+import com.morphus.app.utils.Constants
+
+class SosManager(private val context: Context) {
+
+    companion object {
+        private const val TAG = "SosManager"
+        const val SOS_CHANNEL_ID = "morphus_sos_alert_channel"
+        const val SOS_NOTIFICATION_ID = 2001
+    }
+
+    // Persisted state — prevents duplicate activation across instances
+    var isActive: Boolean
+        get() = context.getSharedPreferences(Constants.PREFS_NAME, Context.MODE_PRIVATE)
+                    .getBoolean(Constants.KEY_SOS_ACTIVE, false)
+        private set(value) { persistState(value) }
+
+    init { createSosNotificationChannel() }
+
+    fun activate() {
+        if (isActive) { Log.w(TAG, "SOS already active"); return }
+        isActive = true
+        persistState(true)
+        showSosNotification()
+        startSosService()
+        Log.i(TAG, "SOS ACTIVATED")
+    }
+
+    fun deactivate() {
+        if (!isActive) return
+        isActive = false
+        NotificationManagerCompat.from(context).cancel(SOS_NOTIFICATION_ID)
+        com.morphus.app.service.EmergencyService.stop(context)
+        Log.i(TAG, "SOS deactivated")
+    }
+
+    private fun createSosNotificationChannel() {
+        val channel = NotificationChannel(SOS_CHANNEL_ID, "SOS Alerts", NotificationManager.IMPORTANCE_HIGH).apply {
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 300, 200, 300, 200, 300)
+            setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
+                AudioAttributes.Builder().setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .setUsage(AudioAttributes.USAGE_ALARM).build())
+        }
+        context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+    }
+
+    private fun showSosNotification() {
+        val pi = PendingIntent.getActivity(context, 0,
+            Intent(context, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val notif = NotificationCompat.Builder(context, SOS_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_backspace).setContentTitle("SOS ACTIVATED")
+            .setContentText("Emergency SOS triggered.").setPriority(NotificationCompat.PRIORITY_MAX)
+            .setOngoing(true).setContentIntent(pi).build()
+        try { NotificationManagerCompat.from(context).notify(SOS_NOTIFICATION_ID, notif) }
+        catch (e: SecurityException) { Log.e(TAG, "Missing POST_NOTIFICATIONS", e) }
+    }
+
+    private fun startSosService() {
+        try { com.morphus.app.service.EmergencyService.start(context) }
+        catch (e: Exception) { Log.e(TAG, "Failed to start EmergencyService", e) }
+    }
+
+    private fun persistState(active: Boolean) {
+        context.getSharedPreferences(Constants.PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(Constants.KEY_SOS_ACTIVE, active).apply()
+    }
+}
+
+================================================================================
+FILE 12: manager/TriggerManager.kt
+================================================================================
+
+package com.morphus.app.manager
+
+import android.content.Context
+
+class TriggerManager(private val context: Context) {
+    fun startListening() { /* TODO: Register shake sensor, etc. */ }
+    fun stopListening() { /* TODO: Unregister sensors */ }
+}
+
+================================================================================
+FILE 13: receiver/BootReceiver.kt  [HARDENED — Correct service target]
+================================================================================
+
+package com.morphus.app.receiver
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.util.Log
+import com.morphus.app.service.EmergencyService
+import com.morphus.app.utils.Constants
+
+class BootReceiver : BroadcastReceiver() {
+
+    companion object { private const val TAG = "BootReceiver" }
+
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != Intent.ACTION_BOOT_COMPLETED &&
+            intent.action != "android.intent.action.QUICKBOOT_POWERON") return
+        val wasActive = context.getSharedPreferences(Constants.PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(Constants.KEY_SOS_ACTIVE, false)
+        if (wasActive) {
+            try { EmergencyService.start(context) }
+            catch (e: Exception) { Log.e(TAG, "Boot restart failed: ${e.message}") }
+        }
+    }
+}
+
+================================================================================
+FILE 14: service/EmergencyService.kt  [THE BRAIN — Fully Hardened]
+================================================================================
+
+package com.morphus.app.service
+
+import android.app.*
+import android.content.Context
+import android.content.Intent
+import android.os.IBinder
+import android.os.PowerManager
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import com.morphus.app.R
+import com.morphus.app.data.SettingsManager
+import com.morphus.app.manager.AudioRecorder
+import com.morphus.app.manager.CallManager
+import com.morphus.app.manager.LocationTracker
+import com.morphus.app.manager.NetworkGuardian
+import com.morphus.app.manager.SmsHandler
+import com.morphus.app.ui.MainActivity
+
+class EmergencyService : Service() {
+
+    companion object {
+        private const val TAG = "EmergencyService"
+        private const val CHANNEL_ID = "morphus_emergency_channel"
+        private const val NOTIFICATION_ID = 3001
+        private const val WAKE_LOCK_TAG = "morphus:emergency_wakelock"
+        private const val ACTION_START = "com.morphus.app.action.START_EMERGENCY"
+        private const val ACTION_STOP = "com.morphus.app.action.STOP_EMERGENCY"
+
+        @JvmStatic fun start(context: Context) {
+            context.startForegroundService(Intent(context, EmergencyService::class.java).apply { action = ACTION_START })
+        }
+        @JvmStatic fun stop(context: Context) {
+            context.startForegroundService(Intent(context, EmergencyService::class.java).apply { action = ACTION_STOP })
+        }
+    }
+
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var locationTracker: LocationTracker? = null
+    private var emergencyActive = false
+
+    private lateinit var settingsManager: SettingsManager
+    private lateinit var repository: com.morphus.app.data.AppRepository
+    private lateinit var smsHandler: SmsHandler
+    private lateinit var audioRecorder: AudioRecorder
+    private lateinit var callManager: CallManager
+    private lateinit var networkGuardian: NetworkGuardian
+
+    private var sosSmsSent = false
+    private var lastSmsLocation: LocationTracker.LocationData? = null
+    private var lastSmsTime = 0L
+    private var isBatteryCritical = false
+
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val heartbeatRunnable = object : Runnable {
+        override fun run() {
+            if (emergencyActive) {
+                checkAndSendHeartbeat()
+                val interval = settingsManager.updateInterval * 60 * 1000L
+                handler.postDelayed(this, if (isBatteryCritical) interval * 2 else interval)
+            }
+        }
+    }
+
+    private val batteryReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val level = intent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            if (level in 0..5 && !isBatteryCritical) {
+                isBatteryCritical = true
+                sendBatteryCriticalSms()
+            }
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+        settingsManager = SettingsManager(this)
+        repository = com.morphus.app.data.AppRepository(this)
+        smsHandler = SmsHandler(this)
+        audioRecorder = AudioRecorder(this)
+        callManager = CallManager(this)
+        networkGuardian = NetworkGuardian(this, smsHandler, repository)
+        val filter = android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(batteryReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(batteryReceiver, filter)
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // System restart — must call startForeground immediately (Android 12+ requirement)
+        if (intent == null || intent.action == null) {
+            startForeground(NOTIFICATION_ID, buildNotification())
+            if (!emergencyActive) startEmergency()
+            return START_STICKY
+        }
+        when (intent.action) {
+            ACTION_STOP -> { stopEmergency(); return START_NOT_STICKY }
+            ACTION_START -> {
+                if (!emergencyActive) {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        startForeground(
+                            NOTIFICATION_ID,
+                            buildNotification(),
+                            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
+                                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                        )
+                    } else {
+                        startForeground(NOTIFICATION_ID, buildNotification())
+                    }
+                    startEmergency()
+                }
+            }
+        }
+        return START_STICKY
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        stopEmergency(); releaseWakeLock()
+        try { unregisterReceiver(batteryReceiver) } catch (_: Exception) {}
+        super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) { super.onTaskRemoved(rootIntent) }
+
+    // ═══════════════════════════════ EMERGENCY LOGIC ═══════════════════════════════
+
+    private fun startEmergency() {
+        emergencyActive = true; sosSmsSent = false; isBatteryCritical = false
+        acquireWakeLock()
+        locationTracker = LocationTracker(context = this, onLocation = { processLocationUpdate(it) })
+        locationTracker?.startTracking()
+        if (settingsManager.isAudioRecordEnabled) audioRecorder.startRecording()
+        networkGuardian.start(true, null)
+        handler.post(heartbeatRunnable)
+        if (settingsManager.isAutoCallEnabled) {
+            val contacts = repository.getEmergencyContacts()
+            if (contacts.isNotEmpty() && androidx.core.content.ContextCompat.checkSelfPermission(
+                    this, android.Manifest.permission.CALL_PHONE
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                callManager.startCallEscalation(contacts)
+            }
+        }
+    }
+
+    private fun processLocationUpdate(data: LocationTracker.LocationData?) {
+        if (data == null) return
+        networkGuardian.updateLocation(data)
+        val contacts = repository.getEmergencyContacts()
+        if (contacts.isEmpty()) return
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.SEND_SMS
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        if (!sosSmsSent) {
+            smsHandler.sendSosSms(data, contacts); sosSmsSent = true
+            lastSmsLocation = data; lastSmsTime = System.currentTimeMillis(); return
+        }
+        val lastLoc = lastSmsLocation ?: return
+        val results = FloatArray(1)
+        android.location.Location.distanceBetween(lastLoc.latitude, lastLoc.longitude, data.latitude, data.longitude, results)
+        if (results[0] > settingsManager.movementThreshold) {
+            smsHandler.sendSosSms(data, contacts); lastSmsLocation = data; lastSmsTime = System.currentTimeMillis()
+        }
+    }
+
+    private fun checkAndSendHeartbeat() {
+        val now = System.currentTimeMillis()
+        val intervalMs = settingsManager.updateInterval * 60 * 1000L
+        if (now - lastSmsTime >= intervalMs) {
+            val contacts = repository.getEmergencyContacts()
+            val lastKnown = lastSmsLocation
+            if (contacts.isNotEmpty() && lastKnown != null) {
+                smsHandler.sendSosSms(lastKnown, contacts); lastSmsTime = now
+            }
+        }
+    }
+
+    private fun sendBatteryCriticalSms() {
+        val contacts = repository.getEmergencyContacts()
+        if (contacts.isNotEmpty()) {
+            val lat = lastSmsLocation?.latitude ?: 0.0; val lon = lastSmsLocation?.longitude ?: 0.0
+            val maps = lastSmsLocation?.toMapsUrl() ?: "Unknown"
+            smsHandler.sendGenericSms(contacts, "BATTERY CRITICAL (<=5%). Last location: $lat, $lon. $maps")
+        }
+    }
+
+    private fun stopEmergency() {
+        if (!emergencyActive) return
+        emergencyActive = false; handler.removeCallbacks(heartbeatRunnable)
+        if (audioRecorder.isRecording) audioRecorder.stopRecording()
+
+        // ── Supabase: Queue incident for upload (offline-safe) ──
+        try {
+            val audioFile = audioRecorder.currentFile
+            val lastLoc = lastSmsLocation
+            val battery = getBatteryLevel()
+            val timestamp = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.getDefault())
+                .format(java.util.Date())
+            val incident = com.morphus.app.network.IncidentData(
+                timestamp = timestamp,
+                latitude = lastLoc?.latitude ?: 0.0,
+                longitude = lastLoc?.longitude ?: 0.0,
+                batteryLevel = battery,
+                audioFilePath = audioFile?.absolutePath
+            )
+            val queueManager = com.morphus.app.network.UploadQueueManager(this)
+            queueManager.enqueue(incident)
+            queueManager.processQueue()
+        } catch (e: Exception) {
+            Log.e(TAG, "Supabase enqueue failed (non-fatal): ${e.message}")
+        }
+        // ── End Supabase block ──
+
+        networkGuardian.stop(); locationTracker?.stopTracking(); locationTracker = null
+        val contacts = repository.getEmergencyContacts()
+        if (contacts.isNotEmpty()) smsHandler.sendGenericSms(contacts, "I AM SAFE. SOS deactivated.")
+        stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
+    }
+
+    private fun getBatteryLevel(): Int {
+        val bm = getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager
+        return bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+    }
+
+    // ═══════════════════════════════ NOTIFICATION ═══════════════════════════════
+
+    private fun createNotificationChannel() {
+        val channel = NotificationChannel(CHANNEL_ID, "Emergency Service", NotificationManager.IMPORTANCE_LOW).apply {
+            setShowBadge(false); lockscreenVisibility = Notification.VISIBILITY_SECRET
+        }
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+    }
+
+    private fun buildNotification(): Notification {
+        val pi = PendingIntent.getActivity(this, 0,
+            Intent(this, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        return NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(R.drawable.ic_location)
+            .setContentTitle("Morphus").setContentText("Protection active").setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW).setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setContentIntent(pi).build()
+    }
+
+    // ═══════════════════════════════ WAKELOCK ═══════════════════════════════
+
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG)
+        wakeLock?.acquire(60 * 60 * 1000L)
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null
+    }
+}
+
+================================================================================
+FILE 15: ui/SOSSettingsActivity.kt
+================================================================================
+
+package com.morphus.app.ui
+
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.widget.EditText
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import com.morphus.app.R
+import com.morphus.app.data.AppRepository
+import com.morphus.app.data.SettingsManager
+import com.morphus.app.databinding.ActivitySosSettingsBinding
+
+class SOSSettingsActivity : AppCompatActivity() {
+
+    private lateinit var binding: ActivitySosSettingsBinding
+    private lateinit var settingsManager: SettingsManager
+    private lateinit var repository: AppRepository
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        binding = ActivitySosSettingsBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+        settingsManager = SettingsManager(this)
+        repository = AppRepository(this)
+        loadSettings(); setupListeners()
+    }
+
+    override fun onUserLeaveHint() { super.onUserLeaveHint(); finish() }
+
+    private fun loadSettings() {
+        try {
+            // Load Contacts
+            val contacts = repository.getEmergencyContacts().joinToString(", ")
+            binding.etContacts?.setText(contacts)
+
+            // Load Toggles
+            binding.switchShake?.isChecked = settingsManager.isShakeEnabled
+            binding.switchPower?.isChecked = settingsManager.isPowerButtonEnabled
+            binding.switchAutoCall?.isChecked = settingsManager.isAutoCallEnabled
+            binding.switchAudioRecord?.isChecked = settingsManager.isAudioRecordEnabled
+
+            // Load Thresholds
+            binding.etMovementThreshold?.setText(settingsManager.movementThreshold.toString())
+            binding.etUpdateInterval?.setText(settingsManager.updateInterval.toString())
+
+            // Load Message Template
+            binding.etMessageTemplate?.setText(settingsManager.messageTemplate)
+        } catch (e: Exception) {
+            android.util.Log.e("SOSSettings", "Error loading settings into views: ${e.message}")
+        }
+    }
+
+    private fun setupListeners() {
+        binding.btnSave.setOnClickListener { saveAllSettings() }
+        binding.btnChangePin.setOnClickListener { showChangePinDialog() }
+    }
+
+    private fun saveAllSettings() {
+        try {
+            // Save Contacts
+            val contactsString = binding.etContacts?.text?.toString() ?: ""
+            val contactsList = contactsString.split(",")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .take(5)
+
+            // Clear existing and save new
+            repository.getEmergencyContacts().forEach { repository.removeEmergencyContact(it) }
+            contactsList.forEach { repository.saveEmergencyContact(it) }
+
+            // Save Toggles
+            settingsManager.isShakeEnabled = binding.switchShake?.isChecked ?: true
+            settingsManager.isPowerButtonEnabled = binding.switchPower?.isChecked ?: true
+            settingsManager.isAutoCallEnabled = binding.switchAutoCall?.isChecked ?: false
+            settingsManager.isAudioRecordEnabled = binding.switchAudioRecord?.isChecked ?: true
+
+            // Save Thresholds
+            val threshold = binding.etMovementThreshold?.text?.toString()?.toIntOrNull() ?: 50
+            settingsManager.movementThreshold = threshold
+
+            val interval = binding.etUpdateInterval?.text?.toString()?.toIntOrNull() ?: 5
+            settingsManager.updateInterval = interval
+
+            // Save Message Template
+            settingsManager.messageTemplate = binding.etMessageTemplate?.text?.toString() ?: ""
+
+            Toast.makeText(this, "Settings saved successfully", Toast.LENGTH_SHORT).show()
+            finish() // Return to calculator after saving
+        } catch (e: Exception) {
+            android.util.Log.e("SOSSettings", "Error saving settings: ${e.message}")
+            Toast.makeText(this, "Error saving settings", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun showChangePinDialog() {
+        val view = LayoutInflater.from(this).inflate(R.layout.dialog_change_pin, null)
+        val etOld = view.findViewById<EditText>(R.id.etOldPin)
+        val etNew = view.findViewById<EditText>(R.id.etNewPin)
+        AlertDialog.Builder(this).setTitle("Change SOS PIN").setView(view)
+            .setPositiveButton("Change") { _, _ ->
+                if (settingsManager.verifyPin(etOld.text.toString())) {
+                    if (etNew.text.length == 4) { settingsManager.sosPin = etNew.text.toString(); Toast.makeText(this, "PIN updated", Toast.LENGTH_SHORT).show() }
+                    else Toast.makeText(this, "PIN must be 4 digits", Toast.LENGTH_SHORT).show()
+                } else Toast.makeText(this, "Incorrect current PIN", Toast.LENGTH_SHORT).show()
+            }.setNegativeButton("Cancel", null).show()
+    }
+}
+
+================================================================================
+FILE 16: ui/CalculatorFragment.kt  (Key trigger logic)
+================================================================================
+
+// In setupButtons() → btnEquals handler:
+binding.btnEquals.setOnClickListener {
+    val settingsManager = com.morphus.app.data.SettingsManager(requireContext())
+    val currentInput = binding.tvResult.text.toString().replace(",", "").replace(".", "")
+    if (currentInput.length == 4 && settingsManager.verifyPin(currentInput)) {
+        vibrateSubtle()
+        startActivity(android.content.Intent(requireContext(), SOSSettingsActivity::class.java))
+        viewModel.clear()
+    } else {
+        viewModel.onEquals()
+    }
+}
+
+// Hidden SOS trigger:
+private fun onSosTriggered() {
+    vibrateConfirmation()
+    SosManager(requireContext()).activate()
+    EmergencyService.start(requireContext())
+}
+
+================================================================================
+FILE 17: res/layout/activity_sos_settings.xml  (Redesigned Dark Dashboard UI)
+================================================================================
+
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0D0D0D"
+    tools:context=".ui.SOSSettingsActivity">
+
+    <com.google.android.material.appbar.AppBarLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#0D0D0D"
+        app:elevation="0dp">
+
+        <com.google.android.material.appbar.MaterialToolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            android:background="#0D0D0D"
+            app:navigationIcon="@drawable/ic_backspace"
+            app:navigationIconTint="#FFFFFF"
+            app:title="Settings"
+            app:titleTextAppearance="@style/TextAppearance.MaterialComponents.Headline6"
+            app:titleTextColor="#FFFFFF" />
+
+    </com.google.android.material.appbar.AppBarLayout>
+
+    <androidx.core.widget.NestedScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipToPadding="false"
+        android:overScrollMode="never"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingHorizontal="16dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="32dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:letterSpacing="0.1"
+                android:text="PIN CONFIGURATION"
+                android:textColor="#8A8A8E"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="20dp"
+                app:cardBackgroundColor="#1C1C1E"
+                app:cardCornerRadius="16dp"
+                app:cardElevation="0dp"
+                app:strokeWidth="0dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnChangePin"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:text="Change Secret SOS PIN"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp"
+                        app:cornerRadius="12dp"
+                        app:icon="@drawable/ic_backspace"
+                        app:iconTint="#E53935"
+                        app:rippleColor="#33E53935"
+                        app:strokeColor="#2C2C2E"
+                        app:strokeWidth="1dp" />
+
+                </LinearLayout>
+
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:letterSpacing="0.1"
+                android:text="EMERGENCY CONTACTS"
+                android:textColor="#8A8A8E"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="20dp"
+                app:cardBackgroundColor="#1C1C1E"
+                app:cardCornerRadius="16dp"
+                app:cardElevation="0dp"
+                app:strokeWidth="0dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <ImageView
+                            android:layout_width="40dp"
+                            android:layout_height="40dp"
+                            android:background="@drawable/ic_phone"
+                            android:backgroundTint="#E53935"
+                            android:contentDescription="Contacts icon"
+                            android:padding="8dp"
+                            android:src="@drawable/ic_phone"
+                            app:tint="#E53935" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Trusted Contacts"
+                                android:textColor="#FFFFFF"
+                                android:textSize="16sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="Add up to 5 emergency numbers"
+                                android:textColor="#8A8A8E"
+                                android:textSize="13sp" />
+
+                        </LinearLayout>
+
+                    </LinearLayout>
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        android:id="@+id/tilContacts"
+                        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:hint="Phone numbers (comma separated)"
+                        app:boxBackgroundColor="#2C2C2E"
+                        app:boxCornerRadiusBottomEnd="12dp"
+                        app:boxCornerRadiusBottomStart="12dp"
+                        app:boxCornerRadiusTopEnd="12dp"
+                        app:boxCornerRadiusTopStart="12dp"
+                        app:boxStrokeColor="#3A3A3C"
+                        app:hintTextColor="#8A8A8E">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/etContacts"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="phone|textNoSuggestions"
+                            android:textColor="#FFFFFF"
+                            android:textColorHint="#5A5A5E" />
+
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                </LinearLayout>
+
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:letterSpacing="0.1"
+                android:text="FEATURE CONFIGURATION"
+                android:textColor="#8A8A8E"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="20dp"
+                app:cardBackgroundColor="#1C1C1E"
+                app:cardCornerRadius="16dp"
+                app:cardElevation="0dp"
+                app:strokeWidth="0dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:divider="@null"
+                    android:orientation="vertical"
+                    android:showDividers="none">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingHorizontal="16dp"
+                        android:paddingVertical="14dp">
+
+                        <ImageView
+                            android:layout_width="36dp"
+                            android:layout_height="36dp"
+                            android:contentDescription="Audio icon"
+                            android:padding="6dp"
+                            android:src="@drawable/ic_mic"
+                            app:tint="#E53935" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Audio Recording"
+                                android:textColor="#FFFFFF"
+                                android:textSize="15sp" />
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="Record audio during SOS"
+                                android:textColor="#8A8A8E"
+                                android:textSize="12sp" />
+
+                        </LinearLayout>
+
+                        <com.google.android.material.switchmaterial.SwitchMaterial
+                            android:id="@+id/switchAudioRecord"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            app:thumbTint="#E53935"
+                            app:trackTint="#3A3A3C" />
+
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginStart="64dp"
+                        android:background="#2C2C2E" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingHorizontal="16dp"
+                        android:paddingVertical="14dp">
+
+                        <ImageView
+                            android:layout_width="36dp"
+                            android:layout_height="36dp"
+                            android:contentDescription="Shake icon"
+                            android:padding="6dp"
+                            android:src="@drawable/ic_accessibility"
+                            app:tint="#FF9800" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Shake Trigger"
+                                android:textColor="#FFFFFF"
+                                android:textSize="15sp" />
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="Shake device to activate SOS"
+                                android:textColor="#8A8A8E"
+                                android:textSize="12sp" />
+
+                        </LinearLayout>
+
+                        <com.google.android.material.switchmaterial.SwitchMaterial
+                            android:id="@+id/switchShake"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            app:thumbTint="#FF9800"
+                            app:trackTint="#3A3A3C" />
+
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginStart="64dp"
+                        android:background="#2C2C2E" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingHorizontal="16dp"
+                        android:paddingVertical="14dp">
+
+                        <ImageView
+                            android:layout_width="36dp"
+                            android:layout_height="36dp"
+                            android:contentDescription="Power icon"
+                            android:padding="6dp"
+                            android:src="@drawable/ic_accessibility"
+                            app:tint="#4CAF50" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Power Button Trigger"
+                                android:textColor="#FFFFFF"
+                                android:textSize="15sp" />
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="Press power button 5x rapidly"
+                                android:textColor="#8A8A8E"
+                                android:textSize="12sp" />
+
+                        </LinearLayout>
+
+                        <com.google.android.material.switchmaterial.SwitchMaterial
+                            android:id="@+id/switchPower"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            app:thumbTint="#4CAF50"
+                            app:trackTint="#3A3A3C" />
+
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginStart="64dp"
+                        android:background="#2C2C2E" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingHorizontal="16dp"
+                        android:paddingVertical="14dp">
+
+                        <ImageView
+                            android:layout_width="36dp"
+                            android:layout_height="36dp"
+                            android:contentDescription="Call icon"
+                            android:padding="6dp"
+                            android:src="@drawable/ic_phone"
+                            app:tint="#2196F3" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Auto Calling"
+                                android:textColor="#FFFFFF"
+                                android:textSize="15sp" />
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="Automatically call first contact"
+                                android:textColor="#8A8A8E"
+                                android:textSize="12sp" />
+
+                        </LinearLayout>
+
+                        <com.google.android.material.switchmaterial.SwitchMaterial
+                            android:id="@+id/switchAutoCall"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            app:thumbTint="#2196F3"
+                            app:trackTint="#3A3A3C" />
+
+                    </LinearLayout>
+
+                </LinearLayout>
+
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:letterSpacing="0.1"
+                android:text="TRACKING SETTINGS"
+                android:textColor="#8A8A8E"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="20dp"
+                app:cardBackgroundColor="#1C1C1E"
+                app:cardCornerRadius="16dp"
+                app:cardElevation="0dp"
+                app:strokeWidth="0dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <ImageView
+                            android:layout_width="40dp"
+                            android:layout_height="40dp"
+                            android:contentDescription="Location icon"
+                            android:padding="8dp"
+                            android:src="@drawable/ic_location"
+                            app:tint="#4CAF50" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Location Tracking"
+                                android:textColor="#FFFFFF"
+                                android:textSize="16sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="Configure movement detection"
+                                android:textColor="#8A8A8E"
+                                android:textSize="13sp" />
+
+                        </LinearLayout>
+
+                    </LinearLayout>
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="14dp"
+                        android:hint="Movement Threshold (meters)"
+                        app:boxBackgroundColor="#2C2C2E"
+                        app:boxCornerRadiusBottomEnd="12dp"
+                        app:boxCornerRadiusBottomStart="12dp"
+                        app:boxCornerRadiusTopEnd="12dp"
+                        app:boxCornerRadiusTopStart="12dp"
+                        app:boxStrokeColor="#3A3A3C"
+                        app:hintTextColor="#8A8A8E">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/etMovementThreshold"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="number"
+                            android:textColor="#FFFFFF"
+                            android:textColorHint="#5A5A5E" />
+
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:hint="Update Interval (minutes)"
+                        app:boxBackgroundColor="#2C2C2E"
+                        app:boxCornerRadiusBottomEnd="12dp"
+                        app:boxCornerRadiusBottomStart="12dp"
+                        app:boxCornerRadiusTopEnd="12dp"
+                        app:boxCornerRadiusTopStart="12dp"
+                        app:boxStrokeColor="#3A3A3C"
+                        app:hintTextColor="#8A8A8E">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/etUpdateInterval"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="number"
+                            android:textColor="#FFFFFF"
+                            android:textColorHint="#5A5A5E" />
+
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                </LinearLayout>
+
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:letterSpacing="0.1"
+                android:text="EMERGENCY MESSAGE"
+                android:textColor="#8A8A8E"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="20dp"
+                app:cardBackgroundColor="#1C1C1E"
+                app:cardCornerRadius="16dp"
+                app:cardElevation="0dp"
+                app:strokeWidth="0dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <ImageView
+                            android:layout_width="40dp"
+                            android:layout_height="40dp"
+                            android:contentDescription="Message icon"
+                            android:padding="8dp"
+                            android:src="@drawable/ic_sms"
+                            app:tint="#FF9800" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Message Template"
+                                android:textColor="#FFFFFF"
+                                android:textSize="16sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="Location &amp; battery auto-appended"
+                                android:textColor="#8A8A8E"
+                                android:textSize="13sp" />
+
+                        </LinearLayout>
+
+                    </LinearLayout>
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:hint="SOS Message"
+                        app:boxBackgroundColor="#2C2C2E"
+                        app:boxCornerRadiusBottomEnd="12dp"
+                        app:boxCornerRadiusBottomStart="12dp"
+                        app:boxCornerRadiusTopEnd="12dp"
+                        app:boxCornerRadiusTopStart="12dp"
+                        app:boxStrokeColor="#3A3A3C"
+                        app:hintTextColor="#8A8A8E">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/etMessageTemplate"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="top"
+                            android:inputType="textMultiLine"
+                            android:minLines="3"
+                            android:textColor="#FFFFFF"
+                            android:textColorHint="#5A5A5E" />
+
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                </LinearLayout>
+
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSave"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="16dp"
+                android:backgroundTint="#E53935"
+                android:letterSpacing="0.05"
+                android:text="Save All Settings"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                app:cornerRadius="16dp"
+                app:rippleColor="#33FFFFFF" />
+
+        </LinearLayout>
+
+    </androidx.core.widget.NestedScrollView>
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>
+
+================================================================================
+FILE 18: network/IncidentData.kt  [NEW — Supabase data model]
+================================================================================
+
+package com.morphus.app.network
+
+import org.json.JSONObject
+
+data class IncidentData(
+    val timestamp: String,
+    val latitude: Double,
+    val longitude: Double,
+    val batteryLevel: Int,
+    val audioUrl: String? = null,
+    val audioFilePath: String? = null
+) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("timestamp", timestamp)
+        put("latitude", latitude)
+        put("longitude", longitude)
+        put("battery_level", batteryLevel)
+        put("audio_url", audioUrl ?: JSONObject.NULL)
+        put("audio_file_path", audioFilePath ?: JSONObject.NULL)
+    }
+
+    companion object {
+        fun fromJson(json: JSONObject): IncidentData = IncidentData(
+            timestamp = json.optString("timestamp", ""),
+            latitude = json.optDouble("latitude", 0.0),
+            longitude = json.optDouble("longitude", 0.0),
+            batteryLevel = json.optInt("battery_level", -1),
+            audioUrl = json.optString("audio_url", null),
+            audioFilePath = json.optString("audio_file_path", null)
+        )
+    }
+}
+
+================================================================================
+FILE 19: network/SupabaseClient.kt  [NEW — REST API client]
+================================================================================
+
+package com.morphus.app.network
+
+import android.util.Log
+import com.morphus.app.utils.Constants
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.io.File
+import java.util.concurrent.TimeUnit
+
+object SupabaseClient {
+
+    private const val TAG = "MORPHUS_UPLOAD"
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    /**
+     * Uploads an audio file to Supabase Storage.
+     * Returns the public URL on success, or null on failure.
+     * NEVER throws — all errors are caught and logged.
+     */
+    suspend fun uploadAudio(file: File): String? = withContext(Dispatchers.IO) {
+        try {
+            if (!file.exists() || file.length() == 0L) {
+                Log.w(TAG, "Audio file missing or empty: ${file.name}")
+                return@withContext null
+            }
+
+            val timestamp = System.currentTimeMillis()
+            val storagePath = "evidence/${timestamp}.m4a"
+            val uploadUrl =
+                "${Constants.SUPABASE_URL}/storage/v1/object/${Constants.SUPABASE_BUCKET}/$storagePath"
+
+            val requestBody = file.asRequestBody("audio/mp4".toMediaType())
+
+            val request = Request.Builder()
+                .url(uploadUrl)
+                .post(requestBody)
+                .addHeader("apikey", Constants.SUPABASE_ANON_KEY)
+                .addHeader("Authorization", "Bearer ${Constants.SUPABASE_ANON_KEY}")
+                .addHeader("Content-Type", "audio/mp4")
+                .addHeader("x-upsert", "true")
+                .build()
+
+            val response = client.newCall(request).execute()
+
+            if (response.isSuccessful) {
+                val publicUrl =
+                    "${Constants.SUPABASE_URL}/storage/v1/object/public/${Constants.SUPABASE_BUCKET}/$storagePath"
+                Log.i(TAG, "Audio uploaded: $publicUrl")
+                return@withContext publicUrl
+            } else {
+                Log.e(TAG, "Upload failed [${response.code}]: ${response.body?.string()}")
+                return@withContext null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Upload exception: ${e.message}")
+            return@withContext null
+        }
+    }
+
+    /**
+     * Inserts an incident record into the Supabase "incidents" table.
+     * Returns true on success, false on failure.
+     * NEVER throws — all errors are caught and logged.
+     */
+    suspend fun insertIncident(data: IncidentData): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val restUrl = "${Constants.SUPABASE_URL}/rest/v1/incidents"
+
+            val json = JSONObject().apply {
+                put("timestamp", data.timestamp)
+                put("latitude", data.latitude)
+                put("longitude", data.longitude)
+                put("battery_level", data.batteryLevel)
+                put("audio_url", data.audioUrl ?: JSONObject.NULL)
+            }
+
+            val requestBody = json.toString()
+                .toRequestBody("application/json".toMediaType())
+
+            val request = Request.Builder()
+                .url(restUrl)
+                .post(requestBody)
+                .addHeader("apikey", Constants.SUPABASE_ANON_KEY)
+                .addHeader("Authorization", "Bearer ${Constants.SUPABASE_ANON_KEY}")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "return=minimal")
+                .build()
+
+            val response = client.newCall(request).execute()
+
+            if (response.isSuccessful) {
+                Log.i(TAG, "Incident inserted successfully")
+                return@withContext true
+            } else {
+                Log.e(TAG, "Insert failed [${response.code}]: ${response.body?.string()}")
+                return@withContext false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Insert exception: ${e.message}")
+            return@withContext false
+        }
+    }
+}
+
+================================================================================
+FILE 20: network/UploadQueueManager.kt  [NEW — Offline upload queue]
+================================================================================
+
+package com.morphus.app.network
+
+import android.content.Context
+import android.util.Log
+import com.morphus.app.utils.Constants
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+
+/**
+ * Offline-first upload queue for SOS incident data.
+ *
+ * When internet is unavailable, incidents are queued locally in SharedPreferences.
+ * When connectivity is restored (via NetworkGuardian), processQueue() is called
+ * to upload all pending items silently in the background.
+ *
+ * Guarantees:
+ * - NEVER blocks the main thread or EmergencyService
+ * - NEVER crashes if Supabase is unreachable
+ * - Retries silently on next network availability
+ */
+class UploadQueueManager(private val context: Context) {
+
+    companion object {
+        private const val TAG = "MORPHUS_UPLOAD"
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val prefs by lazy {
+        context.getSharedPreferences(Constants.UPLOAD_QUEUE_PREFS, Context.MODE_PRIVATE)
+    }
+
+    /**
+     * Add an incident to the offline upload queue.
+     * Safe to call from any thread.
+     */
+    fun enqueue(data: IncidentData) {
+        try {
+            val queue = loadQueue()
+            queue.put(data.toJson())
+            saveQueue(queue)
+            Log.d(TAG, "Queued upload (${queue.length()} pending)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to enqueue: ${e.message}")
+        }
+    }
+
+    /**
+     * Process all queued uploads on a background coroutine.
+     * Items are removed only after successful upload + insert.
+     * Failed items stay in queue for next retry.
+     */
+    fun processQueue() {
+        scope.launch {
+            try {
+                val queue = loadQueue()
+                if (queue.length() == 0) return@launch
+
+                Log.i(TAG, "Processing ${queue.length()} queued uploads")
+
+                val remaining = JSONArray()
+
+                for (i in 0 until queue.length()) {
+                    val json = queue.optJSONObject(i) ?: continue
+                    val item = IncidentData.fromJson(json)
+
+                    val success = uploadItem(item)
+                    if (!success) {
+                        remaining.put(json)
+                    }
+                }
+
+                saveQueue(remaining)
+
+                if (remaining.length() > 0) {
+                    Log.w(TAG, "${remaining.length()} items still pending")
+                } else {
+                    Log.i(TAG, "All queued uploads completed")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Queue processing error: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Upload a single queued item:
+     * 1. Upload audio file → get URL
+     * 2. Insert incident row with audio URL
+     * Returns true only if both steps succeed (or audio file doesn't exist).
+     */
+    private suspend fun uploadItem(item: IncidentData): Boolean {
+        return try {
+            var audioUrl: String? = item.audioUrl
+
+            // Step 1: Upload audio if file path exists and file is present
+            val filePath = item.audioFilePath
+            if (filePath != null && audioUrl == null) {
+                val audioFile = File(filePath)
+                if (audioFile.exists()) {
+                    audioUrl = SupabaseClient.uploadAudio(audioFile)
+                    if (audioUrl == null) {
+                        Log.w(TAG, "Audio upload failed — will retry later")
+                        return false
+                    }
+                } else {
+                    Log.w(TAG, "Audio file not found: $filePath (proceeding without audio)")
+                }
+            }
+
+            // Step 2: Insert incident record
+            val incidentWithUrl = item.copy(audioUrl = audioUrl)
+            val inserted = SupabaseClient.insertIncident(incidentWithUrl)
+
+            if (inserted) {
+                Log.i(TAG, "Upload complete: ${item.timestamp}")
+            }
+
+            inserted
+        } catch (e: Exception) {
+            Log.e(TAG, "Upload item failed: ${e.message}")
+            false
+        }
+    }
+
+    private fun loadQueue(): JSONArray {
+        val raw = prefs.getString(Constants.UPLOAD_QUEUE_KEY, null)
+        return if (raw != null) JSONArray(raw) else JSONArray()
+    }
+
+    private fun saveQueue(queue: JSONArray) {
+        prefs.edit().putString(Constants.UPLOAD_QUEUE_KEY, queue.toString()).apply()
+    }
+}
+
+================================================================================
+FILE 21: app/build.gradle.kts  (Dependencies — includes OkHttp + Coroutines)
+================================================================================
+
+dependencies {
+    // ... existing dependencies ...
+
+    // OkHttp — Lightweight HTTP client for Supabase REST API
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Kotlin Coroutines — Async upload (never blocks SOS)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+}
+
+================================================================================
+                          END OF CODEBASE
+================================================================================

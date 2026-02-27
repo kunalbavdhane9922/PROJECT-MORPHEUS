@@ -1,0 +1,33 @@
+<resources>
+    <string name="app_name">Morphus</string>
+
+    <!-- Onboarding — Location -->
+    <string name="onboarding_location_title">Location Access</string>
+    <string name="onboarding_location_desc">Morphus needs your location to share it with emergency contacts when SOS is triggered. Your location is never tracked outside of emergencies.</string>
+
+    <!-- Onboarding — Background Location -->
+    <string name="onboarding_bg_location_title">Background Location</string>
+    <string name="onboarding_bg_location_desc">To send your location even when the app is in the background, please select \"Allow all the time\" on the next screen.</string>
+
+    <!-- Onboarding — SMS -->
+    <string name="onboarding_sms_title">SMS Permission</string>
+    <string name="onboarding_sms_desc">Morphus sends emergency SMS messages with your location to your trusted contacts during an SOS event.</string>
+
+    <!-- Onboarding — Call Phone -->
+    <string name="onboarding_call_title">Phone Call Permission</string>
+    <string name="onboarding_call_desc">Allows Morphus to automatically call emergency services or your trusted contacts when SOS is activated.</string>
+
+    <!-- Onboarding — Microphone -->
+    <string name="onboarding_mic_title">Microphone Access</string>
+    <string name="onboarding_mic_desc">Morphus can silently record ambient audio during an emergency to provide evidence and context for responders.</string>
+
+    <!-- Onboarding — Accessibility -->
+    <string name="onboarding_accessibility_title">Accessibility Service</string>
+    <string name="onboarding_accessibility_desc">The accessibility service allows Morphus to detect trigger gestures system-wide, even when the app is in the background. Tap the button below to open Settings.</string>
+
+    <!-- Onboarding — Buttons -->
+    <string name="onboarding_grant">Grant Permission</string>
+    <string name="onboarding_open_settings">Open Settings</string>
+    <string name="onboarding_skip">Skip</string>
+    <string name="onboarding_finish">Get Started</string>
+</resources>
