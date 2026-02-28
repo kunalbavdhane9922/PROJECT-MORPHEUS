@@ -12,23 +12,23 @@ survivor-centric architecture that continues functioning during network loss,
 device stress, or restricted user interaction.
 
 -------------------------------------------------------------------------------
-🎯 PROBLEM
+PROBLEM
 -------------------------------------------------------------------------------
 
 Real emergencies rarely happen under ideal conditions.
 
 Existing safety applications fail because:
 
-  ❌ Internet dependency breaks alerts in low-signal areas
-  ❌ Visible SOS apps can be detected by attackers
-  ❌ Panic situations prevent manual interaction
-  ❌ Evidence is not preserved reliably
-  ❌ Alerts stop when connectivity drops
+  X Internet dependency breaks alerts in low-signal areas
+  X Visible SOS apps can be detected by attackers
+  X Panic situations prevent manual interaction
+  X Evidence is not preserved reliably
+  X Alerts stop when connectivity drops
 
 MORPHUS is designed specifically for failure conditions.
 
 -------------------------------------------------------------------------------
-🧠 CORE CONCEPT
+CORE CONCEPT
 -------------------------------------------------------------------------------
 
 The application appears as a normal calculator.
@@ -49,7 +49,7 @@ Hidden SOS triggers include:
 Once activated, the system operates automatically without further interaction.
 
 -------------------------------------------------------------------------------
-⚙️ KEY CAPABILITIES
+KEY CAPABILITIES
 -------------------------------------------------------------------------------
 
 [ STEALTH ARCHITECTURE ]
@@ -112,7 +112,7 @@ Once activated, the system operates automatically without further interaction.
   • SOS state persistence
 
 -------------------------------------------------------------------------------
-🏗️ SYSTEM ARCHITECTURE
+SYSTEM ARCHITECTURE
 -------------------------------------------------------------------------------
 
 Calculator UI (Hidden Triggers)
@@ -139,7 +139,7 @@ Design Principles:
   • Background reliability
 
 -------------------------------------------------------------------------------
-📱 SOS EXECUTION FLOW
+SOS EXECUTION FLOW
 -------------------------------------------------------------------------------
 
 SOS Triggered
@@ -159,7 +159,7 @@ Offline Monitoring
 Cloud Sync When Internet Returns
 
 -------------------------------------------------------------------------------
-🛠️ TECH STACK
+TECH STACK
 -------------------------------------------------------------------------------
 
 ANDROID
@@ -184,7 +184,7 @@ ARCHITECTURE
   • Network State Monitoring
 
 -------------------------------------------------------------------------------
-🔐 PERMISSIONS USED
+PERMISSIONS USED
 -------------------------------------------------------------------------------
 
   ACCESS_FINE_LOCATION
@@ -202,7 +202,7 @@ ARCHITECTURE
 (All permissions are required for emergency reliability.)
 
 -------------------------------------------------------------------------------
-🚀 INSTALLATION
+INSTALLATION
 -------------------------------------------------------------------------------
 
 Clone repository:
@@ -218,7 +218,7 @@ Run locally:
   5. App launches as Calculator
 
 -------------------------------------------------------------------------------
-🧪 DEMO GUIDE
+DEMO GUIDE
 -------------------------------------------------------------------------------
 
 1. Launch app → Calculator appears
@@ -233,7 +233,7 @@ Run locally:
 7. Restore internet → recordings upload automatically
 
 -------------------------------------------------------------------------------
-📂 PROJECT STRUCTURE
+PROJECT STRUCTURE
 -------------------------------------------------------------------------------
 
 com.morphus.app
@@ -247,14 +247,14 @@ com.morphus.app
 └── utils/         → Helpers & constants
 
 -------------------------------------------------------------------------------
-⚠️ DISCLAIMER
+DISCLAIMER
 -------------------------------------------------------------------------------
 
 This project is a hackathon prototype created for educational and research
 purposes and is not intended to replace official emergency services.
 
 -------------------------------------------------------------------------------
-🌟 FUTURE IMPROVEMENTS
+FUTURE IMPROVEMENTS
 -------------------------------------------------------------------------------
 
   • Live tracking dashboard
@@ -263,25 +263,6 @@ purposes and is not intended to replace official emergency services.
   • Satellite fallback integration
   • Wearable device support
   • Police system integration
-
--------------------------------------------------------------------------------
-👨‍💻 TEAM MORPHUS
--------------------------------------------------------------------------------
-
-Developed as part of a safety innovation hackathon focused on
-real-world emergency resilience.
-
--------------------------------------------------------------------------------
-📜 LICENSE
--------------------------------------------------------------------------------
-
-MIT License
-
--------------------------------------------------------------------------------
-⭐ SUPPORT
--------------------------------------------------------------------------------
-
-If you find this project meaningful, consider starring the repository.
 
 ===============================================================================
 "MORPHUS works when other safety apps stop working."
