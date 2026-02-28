@@ -1,6 +1,5 @@
-===============================================================================
-🚨 MORPHUS — Stealth Offline SOS Safety System
-===============================================================================
+# 🚨 MORPHUS — Stealth Offline SOS Safety System
+
 
 🏆 HACKATHON PROTOTYPE — OFFLINE EMERGENCY SAFETY ARCHITECTURE
 
