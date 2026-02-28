@@ -1,125 +1,120 @@
-# MORPHUS — Stealth Offline SOS Safety System
+===============================================================================
+🚨 MORPHUS — Stealth Offline SOS Safety System
+===============================================================================
 
-🏆 Hackathon Prototype — Offline Emergency Safety Architecture
+🏆 HACKATHON PROTOTYPE — OFFLINE EMERGENCY SAFETY ARCHITECTURE
 
-MORPHUS is a covert Android-based emergency safety system designed to operate
-reliably even without internet connectivity. Disguised as a fully functional
-calculator, the application enables silent SOS activation, offline emergency
-communication, automated evidence collection, and fail-safe alert delivery.
-
-Unlike traditional safety apps, MORPHUS is built using an offline-first,
-survivor-centric architecture that continues functioning during network loss,
-device stress, or restricted user interaction.
+"MORPHUS works when other safety apps stop working."
 
 -------------------------------------------------------------------------------
-PROBLEM
+👀 QUICK OVERVIEW (FOR JUDGES)
 -------------------------------------------------------------------------------
 
-Real emergencies rarely happen under ideal conditions.
+MORPHUS is a stealth emergency safety system disguised as a calculator that
+continues protecting users even WITHOUT internet connectivity.
 
-Existing safety applications fail because:
+The system silently triggers SOS alerts, sends GPS location via SMS,
+records evidence, escalates emergency calls, and preserves incident data —
+all automatically and invisibly.
 
-  X Internet dependency breaks alerts in low-signal areas
-  X Visible SOS apps can be detected by attackers
-  X Panic situations prevent manual interaction
-  X Evidence is not preserved reliably
-  X Alerts stop when connectivity drops
+Built for real-world failure scenarios:
+    • No internet
+    • Panic situations
+    • Device lock state
+    • Low battery
+    • Limited user interaction
 
-MORPHUS is designed specifically for failure conditions.
-
--------------------------------------------------------------------------------
-CORE CONCEPT
--------------------------------------------------------------------------------
-
-The application appears as a normal calculator.
-
-Behind this interface runs a persistent emergency system capable of autonomous
-operation.
-
-Hidden SOS triggers include:
-
-  • Secret calculator PIN
-  • Double-tap calculator display
-  • Long-press display
-  • Device shake detection
-  • Double power-button press (lock screen supported)
-  • Emergency calculator mode (AC long press)
-  • Critical battery auto-trigger
-
-Once activated, the system operates automatically without further interaction.
+Platform: Android (Native Kotlin)
+Category: Safety / Emergency Tech / Offline Systems
 
 -------------------------------------------------------------------------------
-KEY CAPABILITIES
+🚩 THE REAL PROBLEM
 -------------------------------------------------------------------------------
 
-### [ STEALTH ARCHITECTURE ]
-  • Calculator disguise UI
-  • Hidden PIN-protected settings
-  • Silent background execution
-  • No visible SOS indicators
+Most safety apps assume ideal conditions.
 
-### [ OFFLINE EMERGENCY SYSTEM ]
-  • Works without internet
-  • Instant SOS SMS with GPS coordinates
-  • Movement-based location updates
-  • Periodic heartbeat tracking
-  • Last-location transmission on signal loss
-  • Offline detection intelligence
+Reality:
+    ❌ Network disappears
+    ❌ Attackers notice SOS apps
+    ❌ Users cannot unlock phones calmly
+    ❌ Evidence gets lost
+    ❌ Apps die in background
 
-### [ LIVE GPS TRACKING ]
-  • High-accuracy fused location provider
-  • Movement threshold tracking (default 50m)
-  • Battery-aware tracking frequency
-  • Google Maps link generation
-
-### [ EMERGENCY CALL ESCALATION ]
-  • Sequential auto-calling of contacts
-  • FIFO emergency call queue
-
-### [ EVIDENCE PRESERVATION ]
-  • Background audio recording
-  • Recording continues with screen locked
-  • Secure local storage (M4A)
-  • Auto upload when internet returns
-
-### [ CLOUD SYNC — SUPABASE ]
-  Uploads incident metadata:
-      - timestamp
-      - latitude
-      - longitude
-      - battery level
-      - audio evidence URL
-
-### [ NETWORK INTELLIGENCE ]
-  • Weak signal detection
-  • Network loss alerts
-  • Signal strength monitoring
-  • Offline confirmation logic
-
-### [ CRITICAL BATTERY PROTECTION ]
-  • Auto SOS at ≤5% battery
-  • Power-saving emergency mode
-  • Battery-critical alert SMS
-
-### [ VOLUNTEER ALERT NETWORK ]
-  • Optional volunteer notifications
-  • Extends safety beyond trusted contacts
-
-### [ PERSISTENT EXECUTION ]
-  • Foreground Service (START_STICKY)
-  • WakeLock protection
-  • Boot auto-restart
-  • SOS state persistence
+Emergency software fails exactly when needed most.
 
 -------------------------------------------------------------------------------
-SYSTEM ARCHITECTURE
+💡 OUR SOLUTION
 -------------------------------------------------------------------------------
 
-Calculator UI (Hidden Triggers)
-            ↓
-        SosManager
-            ↓
-     EmergencyService (Foreground)
+MORPHUS introduces an OFFLINE-FIRST EMERGENCY ARCHITECTURE.
+
+Instead of depending on internet services, the system relies on:
+
+    ✔ Cellular SMS infrastructure
+    ✔ Background foreground services
+    ✔ Persistent execution
+    ✔ Automated decision logic
+    ✔ Stealth interaction design
+
+User triggers SOS once.
+System handles everything else autonomously.
+
+-------------------------------------------------------------------------------
+⭐ WHY MORPHUS IS DIFFERENT (JUDGE HIGHLIGHTS)
+-------------------------------------------------------------------------------
+
+Unlike typical SOS apps:
+
+| Feature                         | Normal Apps | MORPHUS |
+|---------------------------------|-------------|---------|
+| Works without Internet          | ❌          | ✅ |
+| Hidden from attacker            | ❌          | ✅ |
+| Auto evidence recording         | ❌          | ✅ |
+| Persistent after reboot         | ❌          | ✅ |
+| Network-loss intelligence       | ❌          | ✅ |
+| Battery-critical automation     | ❌          | ✅ |
+| Multi-trigger activation        | ⚠️ Limited | ✅ |
+
+MORPHUS is designed for FAILURE CONDITIONS, not ideal demos.
+
+-------------------------------------------------------------------------------
+🧠 HOW IT WORKS (SYSTEM IDEA)
+-------------------------------------------------------------------------------
+
+The app appears as a normal calculator.
+
+Hidden triggers activate SOS:
+
+    • Secret PIN
+    • Double tap display
+    • Long press display
+    • Device shake
+    • Double power button press
+    • Emergency calculator mode
+    • Low battery auto-trigger
+
+After activation:
+
+    → Foreground emergency service starts
+    → GPS tracking begins
+    → SOS SMS sent instantly
+    → Calls contacts sequentially
+    → Audio evidence recorded
+    → Movement tracked
+    → Updates sent periodically
+    → Data uploads when internet returns
+
+No further user action required.
+
+-------------------------------------------------------------------------------
+🏗️ ARCHITECTURE (ENGINEERING VIEW)
+-------------------------------------------------------------------------------
+
+Calculator UI
+        ↓
+     SosManager
+        ↓
+EmergencyService (Foreground Persistent Service)
         ├── LocationTracker
         ├── SmsHandler
         ├── CallManager
@@ -128,138 +123,139 @@ Calculator UI (Hidden Triggers)
         ├── OfflineSosManager
         ├── CriticalBatteryManager
         └── UploadQueueManager
-            ↓
-        Supabase Backend
+        ↓
+   Supabase Backend
 
-Design Principles:
-  • Offline-first
-  • Fail-safe execution
-  • Minimal user interaction
-  • Evidence preservation
-  • Background reliability
-
--------------------------------------------------------------------------------
-SOS EXECUTION FLOW
--------------------------------------------------------------------------------
-
-SOS Triggered
-      ↓
-Foreground Emergency Service Starts
-      ↓
-GPS Acquisition + Audio Recording
-      ↓
-Instant SOS SMS Sent
-      ↓
-Emergency Call Escalation
-      ↓
-Movement & Periodic Updates
-      ↓
-Offline Monitoring
-      ↓
-Cloud Sync When Internet Returns
+Design Focus:
+    • Offline-first
+    • Fail-safe execution
+    • Autonomous operation
+    • Evidence preservation
 
 -------------------------------------------------------------------------------
-TECH STACK
+🔥 KEY FEATURES
+-------------------------------------------------------------------------------
+
+[ STEALTH MODE ]
+• Calculator disguise (icon + UI)
+• Hidden settings via PIN
+• No visible SOS indicators
+
+[ OFFLINE SOS ]
+• GPS location SMS without internet
+• Movement-based updates
+• Last-location transmission
+
+[ EMERGENCY ESCALATION ]
+• Sequential auto-calling
+• Trusted contacts + volunteers
+
+[ EVIDENCE COLLECTION ]
+• Background audio recording
+• Secure local storage
+• Auto cloud upload
+
+[ NETWORK INTELLIGENCE ]
+• Weak signal detection
+• Offline confirmation logic
+• Automatic recovery handling
+
+[ BATTERY SAFETY ]
+• Auto SOS at ≤5%
+• Power-saving emergency mode
+
+-------------------------------------------------------------------------------
+📱 DEMO FLOW (FOR JUDGES)
+-------------------------------------------------------------------------------
+
+1. Open app → looks like calculator
+2. Perform calculation (prove disguise)
+3. Trigger SOS (double tap display)
+4. Observe:
+       ✔ SMS received with GPS link
+       ✔ Background recording active
+       ✔ Persistent notification
+5. Disable SOS → "I AM SAFE" message sent
+6. Re-enable internet → evidence uploads
+
+Demo Time: ~60 seconds
+
+-------------------------------------------------------------------------------
+🛠️ TECH STACK
 -------------------------------------------------------------------------------
 
 ANDROID
-  • Kotlin (Native Android)
-  • Foreground Services
-  • Broadcast Receivers
-  • Accessibility Service
-  • MediaRecorder API
-  • FusedLocationProviderClient
-  • SmsManager API
-  • WakeLock Management
+• Kotlin (Native)
+• Foreground Services
+• Accessibility Service
+• Broadcast Receivers
+• MediaRecorder API
+• Fused Location Provider
+• SmsManager API
 
 BACKEND
-  • Supabase Storage
-  • Supabase Database
-  • OkHttp Networking
-  • Kotlin Coroutines
-
-ARCHITECTURE
-  • Offline Queue System
-  • Persistent SOS State Management
-  • Network State Monitoring
+• Supabase Database
+• Supabase Storage
+• OkHttp Networking
+• Kotlin Coroutines
 
 -------------------------------------------------------------------------------
-PERMISSIONS USED
+🔐 PERMISSIONS (WHY NEEDED)
 -------------------------------------------------------------------------------
 
-  ACCESS_FINE_LOCATION
-  ACCESS_BACKGROUND_LOCATION
-  SEND_SMS
-  CALL_PHONE
-  RECORD_AUDIO
-  FOREGROUND_SERVICE
-  RECEIVE_BOOT_COMPLETED
-  WAKE_LOCK
-  ACCESS_NETWORK_STATE
-  POST_NOTIFICATIONS
-  INTERNET
+Location        → GPS tracking
+SMS             → Offline alerts
+Call Phone      → Emergency escalation
+Audio           → Evidence recording
+Boot Receiver   → Restart protection
+WakeLock        → Service survival
 
-(All permissions are required for emergency reliability.)
+All permissions directly support emergency reliability.
 
 -------------------------------------------------------------------------------
-INSTALLATION
--------------------------------------------------------------------------------
-
-Run locally:
-
-  1. Open project in Android Studio
-  2. Connect physical Android device
-  3. Grant all permissions
-  4. Enable Morphus Accessibility Service
-  5. App launches as Calculator
-
--------------------------------------------------------------------------------
-DEMO GUIDE
--------------------------------------------------------------------------------
-
-1. Launch app → Calculator appears
-2. Use calculator normally
-3. Enter secret PIN → open settings
-4. Trigger SOS (double tap / shake / power button)
-5. Observe:
-      • SMS alerts
-      • GPS tracking
-      • Background recording
-6. Disable SOS → "I AM SAFE" SMS sent
-7. Restore internet → recordings upload automatically
-
--------------------------------------------------------------------------------
-PROJECT STRUCTURE
+📂 PROJECT STRUCTURE
 -------------------------------------------------------------------------------
 
 com.morphus.app
-├── ui/            → Calculator & onboarding UI
-├── manager/       → SOS orchestration logic
-├── service/       → Foreground emergency services
-├── trigger/       → Hidden activation mechanisms
-├── location/      → GPS tracking engine
-├── network/       → Connectivity & cloud sync
-├── receiver/      → Boot restart handlers
-└── utils/         → Helpers & constants
+├── ui/
+├── manager/
+├── service/
+├── trigger/
+├── location/
+├── network/
+├── receiver/
+└── utils/
 
 -------------------------------------------------------------------------------
-DISCLAIMER
+⚠️ DISCLAIMER
 -------------------------------------------------------------------------------
 
-This project is a hackathon prototype created for educational and research
-purposes and is not intended to replace official emergency services.
+This is a hackathon prototype created for research and demonstration purposes.
+It does not replace official emergency services.
 
 -------------------------------------------------------------------------------
-FUTURE IMPROVEMENTS
+🚀 FUTURE ROADMAP
 -------------------------------------------------------------------------------
 
-  • Live tracking dashboard
-  • Volunteer proximity matching
-  • Encrypted evidence vault
-  • Satellite fallback integration
-  • Wearable device support
-  • Police system integration
+• Live tracking dashboard
+• Volunteer proximity system
+• Satellite fallback communication
+• Encrypted evidence vault
+• Wearable SOS triggers
+• Police integration (112 India)
 
-===============================================================================
-"MORPHUS works when other safety apps stop working."
+-------------------------------------------------------------------------------
+👨‍💻 TEAM MORPHUS
+-------------------------------------------------------------------------------
+
+Built during a safety innovation hackathon focused on real-world
+emergency resilience systems.
+
+-------------------------------------------------------------------------------
+⭐ FINAL MESSAGE TO JUDGES
+-------------------------------------------------------------------------------
+
+Most safety apps work when conditions are perfect.
+
+MORPHUS was designed for when everything goes wrong.
 ===============================================================================
