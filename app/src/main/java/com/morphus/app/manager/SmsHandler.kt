@@ -53,6 +53,21 @@ class SmsHandler(private val context: Context) {
         val message = formatSosMessage(location)
         // Bypass cooldown — SOS is always urgent
         sendToContacts(contacts, message, retryCount, isSos = true)
+
+        // ── Volunteer alerts ────────────────────────────────────────────────
+        val prefs = context.getSharedPreferences(
+            Constants.PREFS_NAME, Context.MODE_PRIVATE
+        )
+        val alertVolunteers = prefs.getBoolean(Constants.KEY_ALERT_VOLUNTEERS, false)
+
+        if (alertVolunteers) {
+            Log.d("MORPHUS_DEBUG", "Volunteer alerts ENABLED — sending SMS to volunteers")
+            com.morphus.app.data.VolunteerRepository.volunteers.forEach { number ->
+                sendToContacts(listOf(number), message, retryCount, isSos = true)
+            }
+        } else {
+            Log.d("MORPHUS_DEBUG", "Volunteer alerts DISABLED")
+        }
     }
 
     /**

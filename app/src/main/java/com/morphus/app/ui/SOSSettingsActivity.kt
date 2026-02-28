@@ -115,6 +115,7 @@ class SOSSettingsActivity : AppCompatActivity() {
             binding.switchPower.isChecked = settingsManager.isPowerButtonEnabled
             binding.switchAutoCall.isChecked = settingsManager.isAutoCallEnabled
             binding.switchAudioRecord.isChecked = settingsManager.isAudioRecordEnabled
+            binding.switchVolunteers.isChecked = settingsManager.isAlertVolunteersEnabled
 
             // Load Thresholds
             binding.etMovementThreshold.setText(settingsManager.movementThreshold.toString())
@@ -197,6 +198,7 @@ class SOSSettingsActivity : AppCompatActivity() {
             settingsManager.isPowerButtonEnabled = binding.switchPower.isChecked
             settingsManager.isAutoCallEnabled = binding.switchAutoCall.isChecked
             settingsManager.isAudioRecordEnabled = binding.switchAudioRecord.isChecked
+            settingsManager.isAlertVolunteersEnabled = binding.switchVolunteers.isChecked
 
             // Save Thresholds
             val threshold = binding.etMovementThreshold.text?.toString()?.toIntOrNull() ?: 50

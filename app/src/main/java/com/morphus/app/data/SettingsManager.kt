@@ -45,6 +45,10 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean(Constants.KEY_OFFLINE_GUARD_ENABLED, true)
         set(value) = prefs.edit().putBoolean(Constants.KEY_OFFLINE_GUARD_ENABLED, value).apply()
 
+    var isAlertVolunteersEnabled: Boolean
+        get() = prefs.getBoolean(Constants.KEY_ALERT_VOLUNTEERS, false)
+        set(value) = prefs.edit().putBoolean(Constants.KEY_ALERT_VOLUNTEERS, value).apply()
+
     // ── Tracking Settings ───────────────────────────────────────────────────
 
     var movementThreshold: Int

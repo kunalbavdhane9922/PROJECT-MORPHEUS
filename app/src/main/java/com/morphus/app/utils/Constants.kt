@@ -71,6 +71,7 @@ object Constants {
     const val KEY_POWER_BUTTON_ENABLED = "power_enabled"
     const val KEY_AUTO_CALL_ENABLED = "auto_call_enabled"
     const val KEY_AUDIO_RECORD_ENABLED = "audio_record_enabled"
+    const val KEY_ALERT_VOLUNTEERS = "pref_alert_volunteers"
 
     /** SharedPreferences keys for tracking thresholds. */
     const val KEY_MOVEMENT_THRESHOLD = "movement_threshold"
