@@ -41,6 +41,10 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean(Constants.KEY_AUDIO_RECORD_ENABLED, true)
         set(value) = prefs.edit().putBoolean(Constants.KEY_AUDIO_RECORD_ENABLED, value).apply()
 
+    var isOfflineGuardEnabled: Boolean
+        get() = prefs.getBoolean(Constants.KEY_OFFLINE_GUARD_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(Constants.KEY_OFFLINE_GUARD_ENABLED, value).apply()
+
     // ── Tracking Settings ───────────────────────────────────────────────────
 
     var movementThreshold: Int

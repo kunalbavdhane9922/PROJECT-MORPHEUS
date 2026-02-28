@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.util.Log
 import android.view.GestureDetector
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -15,7 +16,7 @@ import androidx.core.view.GestureDetectorCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
 import com.morphus.app.databinding.FragmentCalculatorBinding
-import com.morphus.app.service.EmergencyService
+import com.morphus.app.manager.SituationType
 import com.morphus.app.manager.SosManager
 
 /**
@@ -37,6 +38,9 @@ class CalculatorFragment : Fragment() {
     private val viewModel: CalculatorViewModel by viewModels()
 
     private lateinit var gestureDetector: GestureDetectorCompat
+
+    /** True when the calculator is in hidden emergency message mode. */
+    private var emergencyMode = false
 
     // ══════════════════════════
     //  Lifecycle
@@ -81,14 +85,32 @@ class CalculatorFragment : Fragment() {
     // ══════════════════════════
 
     private fun setupButtons() {
-        // Digits
+        // Digits — buttons 1-5 are intercepted in emergency mode
         binding.btn0.setOnClickListener { viewModel.onDigit("0") }
-        binding.btn1.setOnClickListener { viewModel.onDigit("1") }
-        binding.btn2.setOnClickListener { viewModel.onDigit("2") }
-        binding.btn3.setOnClickListener { viewModel.onDigit("3") }
-        binding.btn4.setOnClickListener { viewModel.onDigit("4") }
-        binding.btn5.setOnClickListener { viewModel.onDigit("5") }
-        binding.btn6.setOnClickListener { viewModel.onDigit("6") }
+        binding.btn1.setOnClickListener {
+            if (emergencyMode) triggerSituation(SituationType.IN_CAB)
+            else viewModel.onDigit("1")
+        }
+        binding.btn2.setOnClickListener {
+            if (emergencyMode) triggerSituation(SituationType.FOLLOWED)
+            else viewModel.onDigit("2")
+        }
+        binding.btn3.setOnClickListener {
+            if (emergencyMode) triggerSituation(SituationType.UNSAFE_LOCATION)
+            else viewModel.onDigit("3")
+        }
+        binding.btn4.setOnClickListener {
+            if (emergencyMode) triggerSituation(SituationType.MEDICAL)
+            else viewModel.onDigit("4")
+        }
+        binding.btn5.setOnClickListener {
+            if (emergencyMode) triggerSituation(SituationType.MISBEHAVIOR)
+            else viewModel.onDigit("5")
+        }
+        binding.btn6.setOnClickListener {
+            if (emergencyMode) triggerSituation(SituationType.ABUSE)
+            else viewModel.onDigit("6")
+        }
         binding.btn7.setOnClickListener { viewModel.onDigit("7") }
         binding.btn8.setOnClickListener { viewModel.onDigit("8") }
         binding.btn9.setOnClickListener { viewModel.onDigit("9") }
@@ -128,8 +150,27 @@ class CalculatorFragment : Fragment() {
                 viewModel.onEquals()
             }
         }
-        binding.btnClear.setOnClickListener { viewModel.clear() }
-        binding.btnBackspace.setOnClickListener { viewModel.onBackspace() }
+        binding.btnClear.setOnClickListener {
+            if (emergencyMode) {
+                exitEmergencyMode()
+            } else {
+                viewModel.clear()
+            }
+        }
+
+        // Long-press AC → toggle emergency message mode
+        binding.btnClear.setOnLongClickListener {
+            if (emergencyMode) exitEmergencyMode() else enterEmergencyMode()
+            true
+        }
+
+        binding.btnBackspace.setOnClickListener {
+            if (emergencyMode) {
+                exitEmergencyMode()
+            } else {
+                viewModel.onBackspace()
+            }
+        }
         binding.btnDecimal.setOnClickListener { viewModel.onDecimal() }
         binding.btnPercent.setOnClickListener { viewModel.onPercent() }
         binding.btnNegate.setOnClickListener { viewModel.onNegate() }
@@ -185,6 +226,80 @@ class CalculatorFragment : Fragment() {
 
         // Activate the full SOS flow (notification + service + SMS)
         SosManager(requireContext()).activate()
+    }
+
+    // ══════════════════════════
+    //  Emergency Message Mode
+    // ══════════════════════════
+
+    /**
+     * Enters the hidden emergency message mode.
+     * Calculator buttons 1-5 become situation selectors.
+     * Display shows instructions.
+     */
+    private fun enterEmergencyMode() {
+        emergencyMode = true
+        vibrateConfirmation()
+
+        // Show instructions on the calculator display
+        binding.tvExpression.text = "Emergency Mode"
+        binding.tvResult.text = "Select situation below"
+
+        // Relabel buttons 1-6 with emoji hints
+        binding.btn1.text = "\uD83D\uDE95 Cab"
+        binding.btn2.text = "\uD83D\uDC64 Follow"
+        binding.btn3.text = "\uD83D\uDCCD Unsafe"
+        binding.btn4.text = "\uD83E\uDE7A Med"
+        binding.btn5.text = "\uD83D\uDEAB Misb."
+        binding.btn6.text = "\uD83D\uDD34 Abuse"
+
+        // Shrink text size so emoji labels fit the buttons
+        binding.btn1.textSize = 12f
+        binding.btn2.textSize = 12f
+        binding.btn3.textSize = 12f
+        binding.btn4.textSize = 12f
+        binding.btn5.textSize = 12f
+        binding.btn6.textSize = 12f
+
+        Log.d("MORPHUS_UI", "Emergency Mode Enabled")
+    }
+
+    /**
+     * Exits emergency mode and restores normal calculator state.
+     */
+    private fun exitEmergencyMode() {
+        emergencyMode = false
+
+        // Restore original button labels
+        binding.btn1.text = "1"
+        binding.btn2.text = "2"
+        binding.btn3.text = "3"
+        binding.btn4.text = "4"
+        binding.btn5.text = "5"
+        binding.btn6.text = "6"
+
+        // Restore original text size
+        val defaultSize = 24f
+        binding.btn1.textSize = defaultSize
+        binding.btn2.textSize = defaultSize
+        binding.btn3.textSize = defaultSize
+        binding.btn4.textSize = defaultSize
+        binding.btn5.textSize = defaultSize
+        binding.btn6.textSize = defaultSize
+
+        viewModel.clear()
+        Log.d("MORPHUS_UI", "Emergency Mode Disabled")
+    }
+
+    /**
+     * Triggers a situation-based SOS.
+     * Sends custom SMS without calling, then exits emergency mode.
+     */
+    private fun triggerSituation(type: SituationType) {
+        vibrateConfirmation()
+        SosManager(requireContext()).activateWithSituation(type)
+        emergencyMode = false
+        viewModel.clear()
     }
 
     // ══════════════════════════

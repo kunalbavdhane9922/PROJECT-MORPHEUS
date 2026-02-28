@@ -90,4 +90,27 @@ object Constants {
     const val SUPABASE_BUCKET = "sos-evidence"
     const val UPLOAD_QUEUE_PREFS = "morphus_upload_queue"
     const val UPLOAD_QUEUE_KEY = "pending_uploads"
+
+    // ── Offline SOS (Network Guardian) ──────────────────────────────────────
+
+    /** How long connectivity must be lost before offline mode triggers (ms). */
+    const val OFFLINE_DEBOUNCE_MS = 30_000L
+
+    /** Max acceptable GPS accuracy (metres) for the offline SOS SMS. */
+    const val OFFLINE_LOCATION_ACCURACY_THRESHOLD = 50f
+
+    /** How long to retry fetching an accurate location before giving up (ms). */
+    const val OFFLINE_LOCATION_RETRY_MS = 10_000L
+
+    /** Periodic SMS update interval while in offline mode (ms). */
+    const val OFFLINE_UPDATE_INTERVAL_MS = 5 * 60 * 1_000L
+
+    /** Distance (metres) the user must move before an update SMS is sent. */
+    const val OFFLINE_MOVEMENT_THRESHOLD = 50f
+
+    /** Battery percentage at or below which a critical battery SMS is sent. */
+    const val OFFLINE_BATTERY_CRITICAL = 5
+
+    /** SharedPreferences key for Offline Guard feature toggle. */
+    const val KEY_OFFLINE_GUARD_ENABLED = "offline_guard_enabled"
 }

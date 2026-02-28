@@ -15,4 +15,7 @@
     <color name="onboarding_dot_inactive">#44FFFFFF</color>
     <color name="onboarding_button">#FF6200EE</color>
     <color name="onboarding_skip">#80FFFFFF</color>
+
+    <!-- Launcher icon -->
+    <color name="ic_launcher_background">#1A1A2E</color>
 </resources>

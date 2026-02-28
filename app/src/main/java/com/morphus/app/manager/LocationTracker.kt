@@ -5,8 +5,10 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -103,6 +105,18 @@ class LocationTracker(
     var isTracking: Boolean = false
         private set
 
+    // ── First-fix callback ────────────────────────────────────────────────────
+
+    /** Invoked exactly once when the first valid GPS fix arrives. */
+    var firstFixListener: (() -> Unit)? = null
+
+    /** Guards single delivery of the first-fix callback. */
+    @Volatile
+    private var firstFixDelivered = false
+
+    /** Returns true if at least one valid location has been received. */
+    fun hasValidLocation(): Boolean = lastLocation != null
+
     // ── Location callback ─────────────────────────────────────────────────────
 
     private val locationCallback = object : LocationCallback() {
@@ -117,6 +131,14 @@ class LocationTracker(
                 timestamp = loc.time
             )
             lastLocation = data
+
+            // ── First-fix notification ──
+            if (!firstFixDelivered) {
+                firstFixDelivered = true
+                Log.d("MORPHUS_LOCATION", "First GPS fix received")
+                firstFixListener?.invoke()
+            }
+
             onLocation?.invoke(data)
             Log.d(TAG, "📍 ${data.toFormattedString()}")
         }
@@ -206,6 +228,106 @@ class LocationTracker(
      * Returns a Google Maps URL for the last known location, or `null`.
      */
     fun getLastKnownLocationUrl(): String? = lastLocation?.toMapsUrl()
+
+    /**
+     * Fetches a single high-accuracy location fix with constraints.
+     *
+     * Used by [OfflineSosManager] to obtain a reliable GPS position before
+     * sending the emergency SMS.
+     *
+     * @param maxAccuracyMeters Maximum acceptable accuracy (metres). Fixes
+     *   coarser than this are rejected in favour of the cached [lastLocation].
+     * @param timeoutMs How long (ms) to wait for a qualifying fix before
+     *   giving up and returning the best available location (or null).
+     * @param callback Invoked exactly once with the result.
+     */
+    @SuppressLint("MissingPermission")
+    fun getAccurateLocation(
+        maxAccuracyMeters: Float = 50f,
+        timeoutMs: Long = 10_000L,
+        callback: (LocationData?) -> Unit
+    ) {
+        if (!hasLocationPermission()) {
+            Log.e(TAG, "getAccurateLocation: permission not granted")
+            callback(lastLocation)
+            return
+        }
+
+        // Track whether we've already delivered a result.
+        var delivered = false
+        val lock = Any()
+
+        // Timeout handler — returns best available after deadline.
+        val timeoutHandler = Handler(Looper.getMainLooper())
+        val timeoutRunnable = Runnable {
+            synchronized(lock) {
+                if (!delivered) {
+                    delivered = true
+                    Log.w(TAG, "getAccurateLocation: TIMEOUT after ${timeoutMs}ms — returning lastLocation")
+                    callback(lastLocation)
+                }
+            }
+        }
+        timeoutHandler.postDelayed(timeoutRunnable, timeoutMs)
+
+        // Request a fresh fix using getCurrentLocation (API 30+) or
+        // fall back to the ongoing tracking updates.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            fusedClient.getCurrentLocation(
+                Priority.PRIORITY_HIGH_ACCURACY, null
+            ).addOnSuccessListener { loc ->
+                synchronized(lock) {
+                    if (delivered) return@addOnSuccessListener
+                    if (loc != null && loc.accuracy <= maxAccuracyMeters) {
+                        delivered = true
+                        timeoutHandler.removeCallbacks(timeoutRunnable)
+                        val data = LocationData(
+                            latitude = loc.latitude,
+                            longitude = loc.longitude,
+                            speed = loc.speed,
+                            bearing = loc.bearing,
+                            accuracy = loc.accuracy,
+                            timestamp = loc.time
+                        )
+                        lastLocation = data
+                        Log.d(TAG, "getAccurateLocation: fresh fix — ${data.toFormattedString()}")
+                        callback(data)
+                    } else if (loc != null) {
+                        Log.d(TAG, "getAccurateLocation: fix too coarse (${"%.0f".format(loc.accuracy)}m) — waiting for timeout/fallback")
+                        // Let the timeout fallback handle it.
+                    }
+                }
+            }.addOnFailureListener { e ->
+                Log.e(TAG, "getAccurateLocation: getCurrentLocation failed: ${e.message}")
+                // Timeout will handle fallback.
+            }
+        } else {
+            // Pre-API 30: use getLastLocation as an immediate attempt.
+            fusedClient.lastLocation.addOnSuccessListener { loc ->
+                synchronized(lock) {
+                    if (delivered) return@addOnSuccessListener
+                    if (loc != null && loc.accuracy <= maxAccuracyMeters) {
+                        val ageMs = System.currentTimeMillis() - loc.time
+                        if (ageMs <= Constants.LOCATION_STALE_THRESHOLD_MS) {
+                            delivered = true
+                            timeoutHandler.removeCallbacks(timeoutRunnable)
+                            val data = LocationData(
+                                latitude = loc.latitude,
+                                longitude = loc.longitude,
+                                speed = loc.speed,
+                                bearing = loc.bearing,
+                                accuracy = loc.accuracy,
+                                timestamp = loc.time
+                            )
+                            lastLocation = data
+                            Log.d(TAG, "getAccurateLocation: lastLocation OK — ${data.toFormattedString()}")
+                            callback(data)
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

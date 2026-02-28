@@ -20,7 +20,7 @@ class ShakeDetector(
 
     companion object {
         private const val TAG = "MORPHUS_TRIGGER"
-        private const val SHAKE_THRESHOLD = 12f     // g-force threshold
+        private const val SHAKE_THRESHOLD = 2.7f    // g-force threshold
         private const val COOLDOWN_MS = 1500L        // prevent rapid re-trigger
     }
 

@@ -5,6 +5,8 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorManager
 import android.os.BatteryManager
 import android.os.IBinder
 import android.os.PowerManager
@@ -16,8 +18,10 @@ import com.morphus.app.data.SettingsManager
 import com.morphus.app.manager.AudioRecorder
 import com.morphus.app.manager.CallManager
 import com.morphus.app.manager.LocationTracker
+import com.morphus.app.manager.LocationUpdateScheduler
 import com.morphus.app.manager.NetworkGuardian
 import com.morphus.app.manager.SmsHandler
+import com.morphus.app.trigger.ShakeDetector
 import com.morphus.app.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -86,17 +90,18 @@ class EmergencyService : Service() {
             powerSavingMode = true
             Log.i("MORPHUS_POWER", "Power Saving Mode ENABLED")
 
-            // Show persistent emergency notification
+            // Show persistent emergency notification (silent)
             try {
                 val channelId = "morphus_emergency_channel"
                 val notification = NotificationCompat.Builder(context, channelId)
                     .setSmallIcon(R.drawable.ic_backspace)
                     .setContentTitle("Emergency Mode Active")
                     .setContentText("Battery critical — safety tracking enabled")
-                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setPriority(NotificationCompat.PRIORITY_LOW)
                     .setCategory(NotificationCompat.CATEGORY_STATUS)
                     .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                     .setOngoing(true)
+                    .setSilent(true)
                     .build()
 
                 val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
@@ -112,6 +117,9 @@ class EmergencyService : Service() {
     private var locationTracker: LocationTracker? = null
     private var emergencyActive = false
 
+    private lateinit var sensorManager: SensorManager
+    private var shakeDetector: ShakeDetector? = null
+
     private lateinit var settingsManager: SettingsManager
     private lateinit var repository: com.morphus.app.data.AppRepository
 
@@ -126,15 +134,6 @@ class EmergencyService : Service() {
     private var isBatteryCritical = false
 
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val heartbeatRunnable = object : Runnable {
-        override fun run() {
-            if (emergencyActive) {
-                checkAndSendHeartbeat()
-                val interval = settingsManager.updateInterval * 60 * 1000L
-                handler.postDelayed(this, if (isBatteryCritical) interval * 2 else interval)
-            }
-        }
-    }
 
     private val batteryReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -158,6 +157,18 @@ class EmergencyService : Service() {
 
         val intentFilter = android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED)
         registerReceiver(batteryReceiver, intentFilter)
+
+        // ── Shake detector registration ──
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        shakeDetector = ShakeDetector(this)
+        sensorManager.registerListener(
+            shakeDetector,
+            accelerometer,
+            SensorManager.SENSOR_DELAY_GAME
+        )
+        Log.d("MORPHUS_TRIGGER", "Shake detector ACTIVE")
+
         Log.d(TAG, "Service created")
     }
 
@@ -205,6 +216,13 @@ class EmergencyService : Service() {
         stopEmergency()
         releaseWakeLock()
         try { unregisterReceiver(batteryReceiver) } catch (_: Exception) {}
+
+        // ── Release shake detector ──
+        shakeDetector?.let {
+            sensorManager.unregisterListener(it)
+        }
+        Log.d("MORPHUS_TRIGGER", "Shake detector released")
+
         Log.i(TAG, "Service destroyed")
         super.onDestroy()
     }
@@ -237,7 +255,37 @@ class EmergencyService : Service() {
             }
         )
 
+        // ── First-fix callback: send initial SOS, then start 5-min scheduler ──
+        locationTracker?.firstFixListener = {
+            Log.d("MORPHUS_SOS", "FIRST SOS message")
+            sendInitialSos()
+
+            // Start periodic updates every 5 minutes
+            LocationUpdateScheduler.start(
+                context = this,
+                smsHandler = smsHandler,
+                repository = repository,
+                locationTracker = locationTracker
+            )
+        }
+
         locationTracker?.startTracking()
+
+        // ── Failsafe: if GPS takes too long, send with best available location ──
+        handler.postDelayed({
+            if (!sosSmsSent && emergencyActive) {
+                Log.w("MORPHUS_SOS", "GPS timeout — sending last known location")
+                sendInitialSos()
+
+                // Start periodic updates even on failsafe
+                LocationUpdateScheduler.start(
+                    context = this,
+                    smsHandler = smsHandler,
+                    repository = repository,
+                    locationTracker = locationTracker
+                )
+            }
+        }, 15_000L) // 15 seconds fallback
 
         if (settingsManager.isAudioRecordEnabled) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
@@ -250,7 +298,6 @@ class EmergencyService : Service() {
         }
 
         networkGuardian.start(true, null)
-        handler.post(heartbeatRunnable)
         
         // Initial call escalation — sequential through all contacts
         if (settingsManager.isAutoCallEnabled) {
@@ -264,62 +311,53 @@ class EmergencyService : Service() {
         }
     }
 
-    private fun processLocationUpdate(data: LocationTracker.LocationData?) {
-        if (data == null) return
-        Log.d(TAG, "📍 ${data.toFormattedString()}")
-        networkGuardian.updateLocation(data)
+    /**
+     * Sends the initial SOS SMS exactly once.
+     * Called either by [LocationTracker.firstFixListener] on first GPS fix,
+     * or by the 15-second failsafe timer if GPS is slow.
+     */
+    private fun sendInitialSos() {
+        if (sosSmsSent) return  // Guard against double-send (callback + timer race)
+        sosSmsSent = true
 
         val contacts = repository.getEmergencyContacts()
-        if (contacts.isEmpty()) return
+        if (contacts.isEmpty()) {
+            Log.w(TAG, "No emergency contacts — cannot send initial SOS")
+            return
+        }
 
         if (ContextCompat.checkSelfPermission(
                 this, Manifest.permission.SEND_SMS
             ) != PackageManager.PERMISSION_GRANTED
-        ) return
-
-        // 1. Initial SOS SMS
-        if (!sosSmsSent) {
-            smsHandler.sendSosSms(data, contacts)
-            sosSmsSent = true
-            lastSmsLocation = data
-            lastSmsTime = System.currentTimeMillis()
+        ) {
+            Log.e(TAG, "SEND_SMS not granted — cannot send initial SOS")
             return
         }
 
-        // 2. Movement-based tracking
-        val lastLoc = lastSmsLocation
-        if (lastLoc != null) {
-            val results = FloatArray(1)
-            android.location.Location.distanceBetween(
-                lastLoc.latitude, lastLoc.longitude,
-                data.latitude, data.longitude,
-                results
-            )
-            val threshold = settingsManager.movementThreshold.toFloat()
-            if (results[0] > threshold) {
-                Log.i(TAG, "Movement detected: ${results[0]}m > ${threshold}m. Sending update.")
-                smsHandler.sendSosSms(data, contacts)
-                lastSmsLocation = data
-                lastSmsTime = System.currentTimeMillis()
-            }
+        val location = locationTracker?.lastLocation
+        if (location != null) {
+            Log.d("MORPHUS_SMS", "Initial SOS message sending")
+            smsHandler.sendSosSms(location, contacts)
+            lastSmsLocation = location
+            lastSmsTime = System.currentTimeMillis()
+            Log.d("MORPHUS_SMS", "Initial SOS sent")
+        } else {
+            Log.w(TAG, "No location available for initial SOS — will send on next fix")
+            sosSmsSent = false  // Reset so processLocationUpdate can send it
         }
     }
 
-    private fun checkAndSendHeartbeat() {
-        val now = System.currentTimeMillis()
-        val intervalMs = settingsManager.updateInterval * 60 * 1000L
-        
-        if (now - lastSmsTime >= intervalMs) {
-            val contacts = repository.getEmergencyContacts()
-            val lastKnown = lastSmsLocation
-            if (contacts.isNotEmpty() && lastKnown != null) {
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED) {
-                    Log.i(TAG, "Heartbeat interval reached (${settingsManager.updateInterval} min).")
-                    smsHandler.sendSosSms(lastKnown, contacts)
-                    lastSmsTime = now
-                }
-            }
-        }
+    /**
+     * Processes each location update from LocationTracker.
+     * ONLY updates internal location data — does NOT send SMS.
+     * SMS is handled by [sendInitialSos] (first fix) and
+     * [LocationUpdateScheduler] (every 5 min after).
+     */
+    private fun processLocationUpdate(data: LocationTracker.LocationData?) {
+        if (data == null) return
+        Log.d(TAG, "📍 ${data.toFormattedString()}")
+        networkGuardian.updateLocation(data)
+        lastSmsLocation = data
     }
 
     private fun sendBatteryCriticalSms() {
@@ -347,7 +385,8 @@ class EmergencyService : Service() {
         if (!emergencyActive) return
 
         emergencyActive = false
-        handler.removeCallbacks(heartbeatRunnable)
+        LocationUpdateScheduler.stop()
+        Log.d("MORPHUS_SOS", "Scheduler stopped on emergency stop")
         
         if (audioRecorder.isRecording) {
             audioRecorder.stopRecording()
@@ -413,6 +452,8 @@ class EmergencyService : Service() {
         ).apply {
             description = "Active emergency protection"
             setShowBadge(false)
+            setSound(null, null)
+            enableVibration(false)
             lockscreenVisibility = Notification.VISIBILITY_SECRET
         }
 

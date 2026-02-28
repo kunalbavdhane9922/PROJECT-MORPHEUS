@@ -25,10 +25,18 @@ class SmsHandler(private val context: Context) {
 
     companion object {
         private const val TAG = "SmsHandler"
+        private const val SMS_COOLDOWN_MS = 5 * 60 * 1000L   // 5-minute cooldown
     }
 
+    private var lastSmsSentTime = 0L
+
     /**
-     * Sends an SOS message to all contacts.
+     * Sends an SOS message to all contacts **instantly** — no cooldown.
+     *
+     * SOS messages are emergencies and must never be blocked by the generic
+     * cooldown. Rate-limiting for SOS is handled by [EmergencyService] itself
+     * (via `sosSmsSent` flag, heartbeat interval, and movement threshold).
+     *
      * Retries up to [Constants.SMS_MAX_RETRIES] times on failure.
      */
     @RequiresPermission(Manifest.permission.SEND_SMS)
@@ -43,11 +51,13 @@ class SmsHandler(private val context: Context) {
         }
 
         val message = formatSosMessage(location)
-        sendGenericSms(contacts, message, retryCount)
+        // Bypass cooldown — SOS is always urgent
+        sendToContacts(contacts, message, retryCount, isSos = true)
     }
 
     /**
      * Sends a generic SMS message to multiple contacts with retry logic.
+     * Subject to 5-minute cooldown between sends.
      */
     @RequiresPermission(Manifest.permission.SEND_SMS)
     fun sendGenericSms(
@@ -57,6 +67,28 @@ class SmsHandler(private val context: Context) {
     ) {
         if (contacts.isEmpty()) return
 
+        // Cooldown guard — skip if SMS was sent less than 5 min ago (retries bypass)
+        if (retryCount == 0) {
+            val now = System.currentTimeMillis()
+            if (now - lastSmsSentTime < SMS_COOLDOWN_MS) {
+                Log.w(TAG, "SMS cooldown active — skipping (${(SMS_COOLDOWN_MS - (now - lastSmsSentTime)) / 1000}s remaining)")
+                return
+            }
+            lastSmsSentTime = now
+        }
+
+        sendToContacts(contacts, message, retryCount, isSos = false)
+    }
+
+    /**
+     * Core SMS sending logic shared by [sendSosSms] and [sendGenericSms].
+     */
+    private fun sendToContacts(
+        contacts: List<String>,
+        message: String,
+        retryCount: Int,
+        isSos: Boolean
+    ) {
         val smsManager: SmsManager = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 context.getSystemService(SmsManager::class.java) ?: @Suppress("DEPRECATION") SmsManager.getDefault()
@@ -70,9 +102,9 @@ class SmsHandler(private val context: Context) {
             SmsManager.getDefault()
         }
 
-
-        Log.d("MORPHUS_DEBUG", "Sending SMS to ${contacts.size} contacts")
-        Log.i(TAG, "Sending SMS to ${contacts.size} contacts (Attempt ${retryCount + 1})")
+        val label = if (isSos) "SOS" else "Generic"
+        Log.d("MORPHUS_DEBUG", "Sending $label SMS to ${contacts.size} contacts")
+        Log.i(TAG, "Sending $label SMS to ${contacts.size} contacts (Attempt ${retryCount + 1})")
 
         var success = true
         for (phone in contacts) {
@@ -88,7 +120,7 @@ class SmsHandler(private val context: Context) {
         if (!success && retryCount < Constants.SMS_MAX_RETRIES) {
             Log.w(TAG, "Some SMS failed — scheduling retry in ${Constants.SMS_RETRY_DELAY_MS}ms")
             handler.postDelayed({
-                sendGenericSms(contacts, message, retryCount + 1)
+                sendToContacts(contacts, message, retryCount + 1, isSos)
             }, Constants.SMS_RETRY_DELAY_MS)
         }
     }

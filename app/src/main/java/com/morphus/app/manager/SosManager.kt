@@ -96,6 +96,10 @@ class SosManager(private val context: Context) {
         isActive = false
         persistState(false)
 
+        // Stop the periodic location update scheduler
+        LocationUpdateScheduler.stop()
+        Log.d("MORPHUS_SOS", "Scheduler stopped on SOS OFF")
+
         // Dismiss all SOS-related notifications
         val nm = NotificationManagerCompat.from(context)
         nm.cancel(SOS_NOTIFICATION_ID)
@@ -163,12 +167,12 @@ class SosManager(private val context: Context) {
             .setSmallIcon(R.drawable.ic_phone)
             .setContentTitle("SOS Deactivated")
             .setContentText("Emergency protection has been turned off.")
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setSilent(true)
             .build()
 
         try {
@@ -201,12 +205,12 @@ class SosManager(private val context: Context) {
             .setSmallIcon(R.drawable.ic_phone)
             .setContentTitle("SOS Activated")
             .setContentText("Emergency protection is now active.")
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setSilent(true)
             .build()
 
         try {
@@ -225,18 +229,11 @@ class SosManager(private val context: Context) {
         val channel = NotificationChannel(
             SOS_CHANNEL_ID,
             "SOS Alerts",
-            NotificationManager.IMPORTANCE_HIGH
+            NotificationManager.IMPORTANCE_LOW
         ).apply {
             description = "Emergency SOS alerts from Morphus"
-            enableVibration(true)
-            vibrationPattern = longArrayOf(0, 300, 200, 300, 200, 300)
-            setSound(
-                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
-                AudioAttributes.Builder()
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .setUsage(AudioAttributes.USAGE_ALARM)
-                    .build()
-            )
+            enableVibration(false)
+            setSound(null, null)
             lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
         }
 
@@ -271,13 +268,13 @@ class SosManager(private val context: Context) {
                         "Tap this notification to open Morphus."
                     )
             )
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(false)
-            .setOngoing(true)          // cannot be swiped away
+            .setOngoing(true)
             .setContentIntent(pendingIntent)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setSilent(true)
             .build()
 
         try {
@@ -311,5 +308,67 @@ class SosManager(private val context: Context) {
             .edit()
             .putBoolean(Constants.KEY_SOS_ACTIVE, active)
             .apply()
+    }
+
+    // ═══════════════════════════
+    //  Situation-Based SOS
+    // ═══════════════════════════
+
+    /**
+     * Activates SOS with a custom situation message.
+     * Sends a situation-specific SMS but does NOT start calling.
+     * Used by the calculator's hidden emergency mode.
+     */
+    @android.annotation.SuppressLint("MissingPermission")
+    fun activateWithSituation(type: SituationType) {
+        Log.d("MORPHUS_SOS", "Situation=$type")
+
+        // 1. Get last known location for the message
+        val locationString = try {
+            val fusedClient = com.google.android.gms.location.LocationServices
+                .getFusedLocationProviderClient(context)
+            var locStr = "Unknown"
+            fusedClient.lastLocation.addOnSuccessListener { loc ->
+                if (loc != null) {
+                    locStr = "https://maps.google.com/?q=${loc.latitude},${loc.longitude}"
+                }
+            }
+            // Give the fused client a moment, but fall back to "Unknown" if it doesn't resolve
+            Thread.sleep(300)
+            locStr
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get location for situation SOS: ${e.message}")
+            "Unknown"
+        }
+
+        // 2. Build the custom message
+        val message = SituationMessageBuilder.build(type, locationString)
+
+        // 3. Send SMS to all emergency contacts (NO call escalation)
+        try {
+            val repository = com.morphus.app.data.AppRepository(context)
+            val contacts = repository.getEmergencyContacts()
+            if (contacts.isNotEmpty()) {
+                val smsHandler = SmsHandler(context)
+                smsHandler.sendGenericSms(contacts, message)
+                Log.d("MORPHUS_SMS", "Custom SOS sent")
+            } else {
+                Log.w(TAG, "No emergency contacts — custom SOS SMS skipped")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send situation SMS: ${e.message}")
+        }
+
+        // 4. Vibration feedback + notification (reuse existing helpers)
+        vibrateActivationFeedback()
+        showActivationNotification()
+
+        // 5. Start the emergency service (location tracking, audio, etc.)
+        isActive = true
+        persistState(true)
+        showSosNotification()
+        startSosService()
+
+        Log.i(TAG, "🚨 SOS ACTIVATED with situation: $type")
     }
 }
