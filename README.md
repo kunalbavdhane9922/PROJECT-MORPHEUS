@@ -52,13 +52,13 @@ Once activated, the system operates automatically without further interaction.
 KEY CAPABILITIES
 -------------------------------------------------------------------------------
 
-[ STEALTH ARCHITECTURE ]
+### [ STEALTH ARCHITECTURE ]
   • Calculator disguise UI
   • Hidden PIN-protected settings
   • Silent background execution
   • No visible SOS indicators
 
-[ OFFLINE EMERGENCY SYSTEM ]
+### [ OFFLINE EMERGENCY SYSTEM ]
   • Works without internet
   • Instant SOS SMS with GPS coordinates
   • Movement-based location updates
@@ -66,23 +66,23 @@ KEY CAPABILITIES
   • Last-location transmission on signal loss
   • Offline detection intelligence
 
-[ LIVE GPS TRACKING ]
+### [ LIVE GPS TRACKING ]
   • High-accuracy fused location provider
   • Movement threshold tracking (default 50m)
   • Battery-aware tracking frequency
   • Google Maps link generation
 
-[ EMERGENCY CALL ESCALATION ]
+### [ EMERGENCY CALL ESCALATION ]
   • Sequential auto-calling of contacts
   • FIFO emergency call queue
 
-[ EVIDENCE PRESERVATION ]
+### [ EVIDENCE PRESERVATION ]
   • Background audio recording
   • Recording continues with screen locked
   • Secure local storage (M4A)
   • Auto upload when internet returns
 
-[ CLOUD SYNC — SUPABASE ]
+### [ CLOUD SYNC — SUPABASE ]
   Uploads incident metadata:
       - timestamp
       - latitude
@@ -90,22 +90,22 @@ KEY CAPABILITIES
       - battery level
       - audio evidence URL
 
-[ NETWORK INTELLIGENCE ]
+### [ NETWORK INTELLIGENCE ]
   • Weak signal detection
   • Network loss alerts
   • Signal strength monitoring
   • Offline confirmation logic
 
-[ CRITICAL BATTERY PROTECTION ]
+### [ CRITICAL BATTERY PROTECTION ]
   • Auto SOS at ≤5% battery
   • Power-saving emergency mode
   • Battery-critical alert SMS
 
-[ VOLUNTEER ALERT NETWORK ]
+### [ VOLUNTEER ALERT NETWORK ]
   • Optional volunteer notifications
   • Extends safety beyond trusted contacts
 
-[ PERSISTENT EXECUTION ]
+### [ PERSISTENT EXECUTION ]
   • Foreground Service (START_STICKY)
   • WakeLock protection
   • Boot auto-restart
@@ -204,10 +204,6 @@ PERMISSIONS USED
 -------------------------------------------------------------------------------
 INSTALLATION
 -------------------------------------------------------------------------------
-
-Clone repository:
-
-    git clone https://github.com/yourusername/morphus.git
 
 Run locally:
 
